@@ -7,10 +7,9 @@ async function fetchYouTube() {
     return { status: { connected: false, error: 'YOUTUBE_API_KEY not configured' } };
   }
   try {
-    // Get channel ID for @jeffkrasno
     const channelRes = await fetch(
       `https://www.googleapis.com/youtube/v3/channels?part=statistics,snippet&forHandle=jeffkrasno&key=${apiKey}`,
-      { next: { revalidate: 1800 } }
+      { cache: 'no-store' }
     );
     if (!channelRes.ok) throw new Error(`YouTube API error: ${channelRes.status}`);
     const channelData = await channelRes.json();
@@ -20,10 +19,9 @@ async function fetchYouTube() {
     const channelId = channel.id;
     const stats = channel.statistics;
 
-    // Get recent videos (most popular)
     const videosRes = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=id,snippet&channelId=${channelId}&maxResults=50&order=viewCount&type=video&key=${apiKey}`,
-      { next: { revalidate: 1800 } }
+      { cache: 'no-store' }
     );
     const videosData = await videosRes.json();
     const videoIds = (videosData.items || []).map((v: any) => v.id.videoId).filter(Boolean);
@@ -32,7 +30,7 @@ async function fetchYouTube() {
     if (videoIds.length > 0) {
       const statsRes = await fetch(
         `https://www.googleapis.com/youtube/v3/videos?part=statistics,snippet,contentDetails&id=${videoIds.join(',')}&key=${apiKey}`,
-        { next: { revalidate: 1800 } }
+        { cache: 'no-store' }
       );
       const statsData = await statsRes.json();
       videos = (statsData.items || []).map((v: any) => {
@@ -61,6 +59,7 @@ async function fetchYouTube() {
         videoCount: parseInt(stats.videoCount || '0'),
       },
       videos,
+      channelName: channel.snippet?.title || '@jeffkrasno',
       status: { connected: true, lastUpdated: new Date().toISOString() },
     };
   } catch (e: any) {
@@ -78,43 +77,58 @@ async function fetchPodcast() {
   }
 
   try {
-    // Get all podcasts in the network
     const podcastRes = await fetch(
       `https://cms.megaphone.fm/api/networks/${networkId}/podcasts`,
       {
         headers: { 'Authorization': `Token token=${token}` },
-        next: { revalidate: 3600 }
+        cache: 'no-store'
       }
     );
     if (!podcastRes.ok) throw new Error(`Megaphone API error: ${podcastRes.status}`);
     const podcasts = await podcastRes.json();
 
     if (!podcasts.length) throw new Error('No podcasts found in network');
-    const podcast = podcasts[0]; // Use first podcast (Commune)
 
-    // Get episodes
+    // Find the Commune Podcast (not Commune Courses) - look for main podcast
+    const communePodcast = podcasts.find((p: any) =>
+      p.title && p.title.toLowerCase().includes('commune') && !p.title.toLowerCase().includes('courses')
+    ) || podcasts.find((p: any) =>
+      p.title && p.title.toLowerCase().includes('podcast')
+    ) || podcasts[0];
+
+    // Get episodes for the main podcast
     const episodesRes = await fetch(
-      `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podcast.id}/episodes?per=50`,
+      `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${communePodcast.id}/episodes?per=50`,
       {
         headers: { 'Authorization': `Token token=${token}` },
-        next: { revalidate: 3600 }
+        cache: 'no-store'
       }
     );
+    if (!episodesRes.ok) throw new Error(`Megaphone episodes error: ${episodesRes.status}`);
     const episodesData = await episodesRes.json();
-    const episodes = (Array.isArray(episodesData) ? episodesData : episodesData.episodes || []).map((ep: any) => ({
+    const episodeList = Array.isArray(episodesData) ? episodesData : (episodesData.episodes || []);
+    const episodes = episodeList.map((ep: any) => ({
       id: ep.id,
       title: ep.title,
       description: ep.summary || ep.subtitle || '',
       audioUrl: ep.audioUrl || ep.original_url,
       duration: ep.duration,
       publishedAt: ep.pubdate || ep.publishedAt,
-      thumbnail: ep.imageUrl || podcast.imageUrl,
+      thumbnail: ep.imageUrl || communePodcast.imageUrl,
+    }));
+
+    // Get all shows for reference
+    const allShows = podcasts.map((p: any) => ({
+      id: p.id,
+      title: p.title,
+      episodeCount: p.episodeCount,
     }));
 
     return {
       episodes,
-      channelTitle: podcast.title || 'Commune Podcast',
-      totalEpisodes: podcast.episodeCount || episodes.length,
+      channelTitle: communePodcast.title || 'Commune Podcast',
+      totalEpisodes: communePodcast.episodeCount || episodes.length,
+      allShows,
       status: { connected: true, lastUpdated: new Date().toISOString() },
     };
   } catch (e: any) {
@@ -122,62 +136,65 @@ async function fetchPodcast() {
   }
 }
 
-// Apify social scraping
-async function fetchApifySocial(actorId: string, platform: string, handle: string) {
+// Social Media via Apify
+async function fetchSocial(platform: string, username: string) {
   const apifyToken = process.env.APIFY_API_TOKEN;
-  if (!apifyToken) {
-    return {
-      platform,
-      handle,
-      status: { connected: false, error: 'APIFY_API_TOKEN not configured. Upload CSV to connect.' }
-    };
+  if (!apifyToken || apifyToken === 'REPLACE_WITH_YOUR_APIFY_TOKEN') {
+    return { status: { connected: false, error: `Add APIFY_API_TOKEN to connect ${platform}` } };
   }
+
+  const actorMap: Record<string, string> = {
+    instagram: 'apify/instagram-profile-scraper',
+    tiktok: 'clockworks/tiktok-profile-scraper',
+    facebook: 'apify/facebook-pages-scraper',
+  };
+
+  const actor = actorMap[platform];
+  if (!actor) return { status: { connected: false, error: `Unknown platform: ${platform}` } };
+
   try {
     const runRes = await fetch(
-      `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apifyToken}&maxItems=20`,
+      `https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?token=${apifyToken}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: handle,
+          usernames: [username],
           resultsLimit: 20,
         }),
+        signal: AbortSignal.timeout(25000),
       }
     );
-    if (!runRes.ok) throw new Error(`Apify error: ${runRes.status}`);
-    const items = await runRes.json();
-    const profileData = items[0] || {};
+    if (!runRes.ok) throw new Error(`Apify ${platform} error: ${runRes.status}`);
+    const data = await runRes.json();
     return {
-      platform,
-      handle,
-      followers: profileData.followersCount || profileData.followers,
-      posts: items,
+      data: Array.isArray(data) ? data[0] : data,
       status: { connected: true, lastUpdated: new Date().toISOString() },
     };
   } catch (e: any) {
-    return {
-      platform,
-      handle,
-      status: { connected: false, error: e.message }
-    };
+    return { status: { connected: false, error: e.message } };
   }
 }
 
 export async function GET() {
-  const [youtube, podcast, instagram, facebook, tiktok] = await Promise.allSettled([
-    fetchYouTube(),
-    fetchPodcast(),
-    fetchApifySocial('apify~instagram-scraper', 'Instagram', 'jeffkrasno'),
-    fetchApifySocial('apify~facebook-posts-scraper', 'Facebook', 'jeffkrasno'),
-    fetchApifySocial('clockworks~tiktok-scraper', 'TikTok', 'jeffkrasno'),
-  ]);
+  try {
+    const [youtube, podcast, instagram, tiktok, facebook] = await Promise.allSettled([
+      fetchYouTube(),
+      fetchPodcast(),
+      fetchSocial('instagram', 'jeffkrasno'),
+      fetchSocial('tiktok', 'jeffkrasno'),
+      fetchSocial('facebook', 'jeffkrasno'),
+    ]);
 
-  return NextResponse.json({
-    youtube: youtube.status === 'fulfilled' ? youtube.value : { status: { connected: false, error: 'Failed to fetch' } },
-    podcast: podcast.status === 'fulfilled' ? podcast.value : { status: { connected: false, error: 'Failed to fetch' } },
-    instagram: instagram.status === 'fulfilled' ? instagram.value : { status: { connected: false, error: 'Failed to fetch' } },
-    facebook: facebook.status === 'fulfilled' ? facebook.value : { status: { connected: false, error: 'Failed to fetch' } },
-    tiktok: tiktok.status === 'fulfilled' ? tiktok.value : { status: { connected: false, error: 'Failed to fetch' } },
-    lastRefresh: new Date().toISOString(),
-  });
+    return NextResponse.json({
+      youtube: youtube.status === 'fulfilled' ? youtube.value : { status: { connected: false, error: 'Fetch failed' } },
+      podcast: podcast.status === 'fulfilled' ? podcast.value : { status: { connected: false, error: 'Fetch failed' } },
+      instagram: instagram.status === 'fulfilled' ? instagram.value : { status: { connected: false, error: 'Fetch failed' } },
+      tiktok: tiktok.status === 'fulfilled' ? tiktok.value : { status: { connected: false, error: 'Fetch failed' } },
+      facebook: facebook.status === 'fulfilled' ? facebook.value : { status: { connected: false, error: 'Fetch failed' } },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
 }
