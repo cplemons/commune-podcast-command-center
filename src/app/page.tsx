@@ -233,7 +233,7 @@ function SocialSection({ data, platform, icon: Icon, color, expanded, onToggle }
 function PodcastSection({ data, expanded, onToggle }: any) {
   const [modal, setModal] = useState<any>(null);
   const connected = data?.status?.connected;
-  const networkStats = data?.networkStats || {};
+  const podcastStats = data?.podcastStats || {};
   const topEpisodes = data?.topEpisodes || data?.episodes?.slice(0,8) || [];
   const episodes = data?.episodes || [];
   const hasAnalytics = topEpisodes.some((e: any) => e.totalDownloads > 0 || e.totalStreams > 0);
@@ -248,10 +248,10 @@ function PodcastSection({ data, expanded, onToggle }: any) {
           ) : (
             <>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <StatCard label="Total Episodes" value={fmt(data?.totalEpisodes||0)} icon={Mic}/>
-                <StatCard label="Total Downloads" value={fmt(networkStats.totalDownloads||0)} sub="last 12 months" icon={Download}/>
-                <StatCard label="Total Streams" value={fmt(networkStats.totalStreams||0)} sub="last 12 months" icon={Radio}/>
-                <StatCard label="Avg Listen Time" value={fmtTime(networkStats.avgConsumptionTime||0)} icon={Headphones}/>
+                <StatCard label="Total Episodes" value={fmt(podcastStats.totalEpisodes||0)} icon={Mic}/>
+                <StatCard label="Total Downloads" value={fmt(podcastStats.totalDownloads||0)} sub="last 12 months" icon={Download}/>
+                <StatCard label="Total Streams" value={fmt(podcastStats.totalStreams||0)} sub="last 12 months" icon={Radio}/>
+                <StatCard label="Avg Listen Time" value={fmtTime(podcastStats.avgConsumptionTime||0)} icon={Headphones}/>
               </div>
 
               <div>
