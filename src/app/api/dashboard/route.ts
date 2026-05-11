@@ -236,11 +236,11 @@ async function fetchInstagram() {
 
     const totalViews = recentPosts.reduce((s: number, p: any) =>
       s + (p.videoPlayCount || p.videoViewCount || p.likesCount || 0), 0);
-    const avgEngagement = recentPosts.length > 0
+    const avgEngagement = recentPosts.length > 0 && followers > 0
       ? recentPosts.reduce((s: number, p: any) => {
           const likes = p.likesCount || 0;
           const comments = p.commentsCount || 0;
-          return s + likes + comments;
+          return s + ((likes + comments) / followers * 100);
         }, 0) / recentPosts.length
       : 0;
 
