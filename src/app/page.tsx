@@ -439,15 +439,15 @@ function ClaudePanel({ data, onClose }: any) {
             <p className="text-[#6b5f52] text-sm font-medium">AI Analytics Assistant</p>
             <p className="text-[#4a4038] text-xs mt-2">Ask questions about your content performance. Examples:</p>
             <div className="mt-3 space-y-1">
-              {['"Which topics get the most views?"','"What's my best performing content style?"','"Which guests should we invite back?"'].map(ex => (
+              {['"Which topics get the most views?"','"What is my best performing content?"','"Which guests should we invite back?"'].map(ex => (
                 <p key={ex} className="text-[#c4622d] text-xs opacity-70 italic">{ex}</p>
               ))}
             </div>
           </div>
         )}
-        {messages.map((m, i) => (
+        {messages.map((m: any, i: number) => (
           <div key={i} className={m.role==='user' ? 'flex justify-end' : 'flex justify-start'}>
-            <div className={`max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed ${m.role==='user' ? 'bg-[#c4622d] text-white' : 'bg-[#1a1612] text-[#c8bdb0]'}`}>
+            <div className={"max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed " + (m.role==='user' ? 'bg-[#c4622d] text-white' : 'bg-[#1a1612] text-[#c8bdb0]')}>
               {m.text}
             </div>
           </div>
@@ -457,11 +457,11 @@ function ClaudePanel({ data, onClose }: any) {
             <div className="bg-[#1a1612] rounded-xl px-3 py-2 text-xs text-[#6b5f52]">Analyzing your data...</div>
           </div>
         )}
-        <div ref={bottomRef}/>
+        <span ref={bottomRef}></span>
       </div>
       <div className="p-4 border-t border-[#2a2218]">
         <div className="flex gap-2">
-          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key==='Enter' && send()}
+          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter') send(); }}
             placeholder="Ask about your analytics..." className="flex-1 bg-[#1a1612] text-[#e8ddd0] placeholder-[#4a4038] text-xs rounded-lg px-3 py-2 outline-none border border-[#2a2218] focus:border-[#c4622d]"/>
           <button onClick={send} disabled={loading} className="bg-[#c4622d] hover:bg-[#d4724d] disabled:opacity-40 text-white rounded-lg p-2 transition-colors">
             <Send size={14}/>
@@ -471,6 +471,7 @@ function ClaudePanel({ data, onClose }: any) {
     </div>
   );
 }
+
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
@@ -577,4 +578,3 @@ export default function Dashboard() {
   );
 }
 
-    </div>
