@@ -16,7 +16,6 @@ async function fetchYouTube() {
     const channelId = channel.id;
     const stats = channel.statistics;
 
-    // Fetch top 50 videos sorted by view count
     const videosRes = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=id,snippet&channelId=${channelId}&maxResults=50&order=viewCount&type=video&key=${apiKey}`,
       { cache: 'no-store' }
@@ -47,8 +46,6 @@ async function fetchYouTube() {
     }
 
     const totalViews = parseInt(stats.viewCount || '0');
-    const totalLikes = topVideos.reduce((s: number, v: any) => s + v.likes, 0);
-    const totalComments = topVideos.reduce((s: number, v: any) => s + v.comments, 0);
     const avgEngagement = topVideos.length > 0
       ? topVideos.reduce((s: number, v: any) => s + v.engagementRate, 0) / topVideos.length
       : 0;
@@ -75,26 +72,26 @@ async function fetchPodcast(megaphoneApiKey?: string) {
   const apiToken = megaphoneApiKey || process.env.MEGAPHONE_API_TOKEN;
 
   try {
-    // Fetch RSS for episode metadata
     const rssRes = await fetch(RSS_URL, { cache: 'no-store' });
     if (!rssRes.ok) throw new Error(`RSS feed error: ${rssRes.status}`);
     const rssText = await rssRes.text();
 
-    // Parse episodes from RSS
-    const items = rssText.match(/<item>[sS]*?<\/item>/g) || [];
+    const items = rssText.match(/<item>[\s\S]*?<\/item>/g) || [];
     const parseTag = (xml: string, tag: string) => {
-      const m = xml.match(new RegExp(`<${tag}(?:[^>]*)><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\/${tag}>|<${tag}(?:[^>]*)>([^<]*)<\/${tag}>`));
+      const m = xml.match(new RegExp('<' + tag + '(?:[^>]*)><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\/' + tag + '>|<' + tag + '(?:[^>]*)>([^<]*)<\/' + tag + '>'));
       return m ? (m[1] || m[2] || '').trim() : '';
     };
     const parseAttr = (xml: string, tag: string, attr: string) => {
-      const m = xml.match(new RegExp(`<${tag}[^>]*${attr}="([^"]*)"`));
+      const m = xml.match(new RegExp('<' + tag + '[^>]*' + attr + '="([^"]*)"'));
       return m ? m[1] : '';
     };
+
+    const guidPattern = new RegExp('/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/');
 
     const rssEpisodes = items.slice(0, 100).map((item: string) => {
       const enclosureUrl = parseAttr(item, 'enclosure', 'url');
       const guid = parseTag(item, 'guid') || enclosureUrl;
-      const megaphoneId = guid.match(\/([a-f0-9-]{36})\/`)?.[1] || '';
+      const megaphoneId = (guid.match(guidPattern) || [])[1] || '';
       const durationStr = parseTag(item, 'itunes:duration');
       let durationMins = 0;
       if (durationStr.includes(':')) {
@@ -104,7 +101,7 @@ async function fetchPodcast(megaphoneApiKey?: string) {
         durationMins = Math.floor(parseInt(durationStr || '0') / 60);
       }
       return {
-        id: megaphoneId,
+        id: megaphoneId || enclosureUrl,
         title: parseTag(item, 'title'),
         publishedAt: parseTag(item, 'pubDate'),
         duration: durationMins,
@@ -117,23 +114,19 @@ async function fetchPodcast(megaphoneApiKey?: string) {
       };
     });
 
-    const podcastName = rssText.match(/<title><!\[CDATA\[([^\]]+)\]\]><\/title>|<title>([^<]+)<\/title>/)?.[1] || 
-                        rssText.match(/<channel>[^]*?<title>(?:<!\[CDATA\[)?([^\]<]+)/)?.[1] || 
-                        'Commune with Jeff Krasno';
+    const podNameMatch = rssText.match(/<channel>[\s\S]*?<title>(?:<!\[CDATA\[)?([^\]<]+)/);
+    const podcastName = podNameMatch ? podNameMatch[1].trim() : 'Commune with Jeff Krasno';
 
-    // Try Megaphone API for analytics if token available
     let analyticsAvailable = false;
     let episodesWithAnalytics = [...rssEpisodes];
+    let totalDownloads: number | null = null;
+    let totalStreams: number | null = null;
 
     if (apiToken) {
       try {
-        // Try to get podcast info and episodes from Megaphone API
         const podcastsRes = await fetch(
           `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts`,
-          {
-            headers: { 'Authorization': `Token token=${apiToken}` },
-            cache: 'no-store',
-          }
+          { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
         );
 
         if (podcastsRes.ok) {
@@ -142,53 +135,27 @@ async function fetchPodcast(megaphoneApiKey?: string) {
           const podcastId = podcast?.id || podcast?.uid;
 
           if (podcastId) {
-            // Try episodes analytics endpoint
             const epsRes = await fetch(
               `https://cms.megaphone.fm/api/podcasts/${podcastId}/episodes?limit=100`,
-              {
-                headers: { 'Authorization': `Token token=${apiToken}` },
-                cache: 'no-store',
-              }
+              { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
             );
-
             if (epsRes.ok) {
               const epsData = await epsRes.json();
               const apiEpisodes = Array.isArray(epsData) ? epsData : epsData?.episodes || [];
-              
               if (apiEpisodes.length > 0) {
                 analyticsAvailable = true;
-                // Merge analytics with RSS episodes
                 episodesWithAnalytics = rssEpisodes.map(ep => {
-                  const apiEp = apiEpisodes.find((ae: any) => 
-                    ae.title === ep.title || ae.id === ep.id || ae.uid === ep.id
-                  );
+                  const apiEp = apiEpisodes.find((ae: any) => ae.title === ep.title || ae.id === ep.id || ae.uid === ep.id);
                   if (apiEp) {
-                    const downloads = apiEp.downloads || apiEp.totalDownloads || apiEp.download_count || 0;
-                    const streams = apiEp.streams || apiEp.totalStreams || apiEp.stream_count || 0;
-                    const delivered = apiEp.delivered || apiEp.totalDelivered || (downloads + streams);
-                    return {
-                      ...ep,
-                      downloads,
-                      streams,
-                      delivered,
-                      performanceScore: downloads + streams,
-                    };
+                    const dl = apiEp.downloads || apiEp.totalDownloads || apiEp.download_count || 0;
+                    const st = apiEp.streams || apiEp.totalStreams || apiEp.stream_count || 0;
+                    return { ...ep, downloads: dl, streams: st, delivered: dl + st, performanceScore: dl + st };
                   }
                   return ep;
                 });
+                totalDownloads = episodesWithAnalytics.reduce((s, e) => s + e.downloads, 0);
+                totalStreams = episodesWithAnalytics.reduce((s, e) => s + e.streams, 0);
               }
-            }
-
-            // Try analytics summary endpoint
-            const statsRes = await fetch(
-              `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/analytics/summary`,
-              {
-                headers: { 'Authorization': `Token token=${apiToken}` },
-                cache: 'no-store',
-              }
-            );
-            if (statsRes.ok) {
-              analyticsAvailable = true;
             }
           }
         }
@@ -197,13 +164,9 @@ async function fetchPodcast(megaphoneApiKey?: string) {
       }
     }
 
-    // Sort by performance if available, otherwise keep RSS order (most recent first)
     const topEpisodes = analyticsAvailable
       ? [...episodesWithAnalytics].sort((a, b) => b.performanceScore - a.performanceScore)
       : episodesWithAnalytics;
-
-    const totalDownloads = topEpisodes.reduce((s, e) => s + e.downloads, 0);
-    const totalStreams = topEpisodes.reduce((s, e) => s + e.streams, 0);
 
     return {
       podcastName,
@@ -211,8 +174,8 @@ async function fetchPodcast(megaphoneApiKey?: string) {
       episodes: topEpisodes,
       analyticsAvailable,
       apiKeyConfigured: !!apiToken,
-      totalDownloads: totalDownloads > 0 ? totalDownloads : null,
-      totalStreams: totalStreams > 0 ? totalStreams : null,
+      totalDownloads,
+      totalStreams,
       status: { connected: true },
     };
   } catch (err: any) {
@@ -243,11 +206,8 @@ async function fetchInstagram() {
     const items = await runRes.json();
     if (!Array.isArray(items) || items.length === 0) throw new Error('No Instagram data returned');
 
-    // Profile-level stats are on the first item (account data)
     const profile = items[0];
-    const followers = profile.followersCount || profile.followingCount && profile.followersCount || 0;
-    
-    // Posts are in latestPosts or childData
+    const followers = profile.followersCount || 0;
     const rawPosts = profile.latestPosts || profile.posts || items.filter((i: any) => i.type === 'Image' || i.type === 'Video' || i.shortCode);
 
     const topPosts = rawPosts
@@ -270,12 +230,7 @@ async function fetchInstagram() {
     const avgEngagement = totalViews > 0 ? (totalEngagement / totalViews) * 100 : 0;
 
     return {
-      profileStats: {
-        followers,
-        totalViews,
-        avgEngagement,
-        postsCount: profile.postsCount || rawPosts.length || 0,
-      },
+      profileStats: { followers, totalViews, avgEngagement, postsCount: profile.postsCount || rawPosts.length || 0 },
       topPosts,
       status: { connected: true },
     };
@@ -307,10 +262,8 @@ async function fetchTikTok() {
     const items = await runRes.json();
     if (!Array.isArray(items) || items.length === 0) throw new Error('No TikTok data returned');
 
-    // Extract follower count from authorMeta on first post
     const firstItem = items[0];
-    const followers = firstItem?.authorMeta?.fans || firstItem?.authorMeta?.followers || 
-                      firstItem?.authorStats?.followerCount || 0;
+    const followers = firstItem?.authorMeta?.fans || firstItem?.authorMeta?.followers || 0;
     const following = firstItem?.authorMeta?.following || 0;
 
     const topPosts = items
@@ -319,10 +272,10 @@ async function fetchTikTok() {
         id: p.id || p.videoId,
         caption: (p.text || p.desc || '').substring(0, 100),
         thumbnail: p.covers?.default || p.cover || p.thumbnail || p.videoMeta?.coverUrl || '',
-        likes: p.diggCount || p.likeCount || p.stats?.diggCount || 0,
-        comments: p.commentCount || p.stats?.commentCount || 0,
-        views: p.playCount || p.viewCount || p.stats?.playCount || 0,
-        shares: p.shareCount || p.stats?.shareCount || 0,
+        likes: p.diggCount || p.likeCount || 0,
+        comments: p.commentCount || 0,
+        views: p.playCount || p.viewCount || 0,
+        shares: p.shareCount || 0,
         publishedAt: p.createTimeISO || (p.createTime ? new Date(p.createTime * 1000).toISOString() : ''),
         url: p.webVideoUrl || (p.id ? `https://www.tiktok.com/@jeffkrasno/video/${p.id}` : ''),
         ctr: p.playCount > 0 ? (p.diggCount || 0) / p.playCount * 100 : 0,
@@ -367,14 +320,12 @@ async function fetchFacebook() {
     if (!Array.isArray(items) || items.length === 0) throw new Error('No Facebook data returned');
 
     const topPosts = items.map((p: any) => {
-      // Find best image URL from multiple possible fields
       let thumbnail = '';
       if (p.media && p.media.length > 0) {
-        thumbnail = p.media[0]?.photo?.imageUrl || p.media[0]?.video?.thumbnailUrl || 
+        thumbnail = p.media[0]?.photo?.imageUrl || p.media[0]?.video?.thumbnailUrl ||
                     p.media[0]?.imageUrl || p.media[0]?.url || '';
       }
       if (!thumbnail) thumbnail = p.imageUrl || p.photo?.imageUrl || p.thumbnailUrl || p.videoThumbnailUrl || '';
-      // If still no image, try to extract from attachments
       if (!thumbnail && p.attachments?.length > 0) {
         thumbnail = p.attachments[0]?.media?.image?.src || p.attachments[0]?.imageUrl || '';
       }
@@ -384,37 +335,29 @@ async function fetchFacebook() {
       const shares = p.shares || p.sharesCount || 0;
       const views = p.videoViewCount || p.views || p.reach || 0;
       const engagement = likes + comments + shares;
-      
+
       return {
         id: p.postId || p.id,
         url: p.url || p.postUrl || '',
         thumbnail,
         caption: (p.text || p.message || p.caption || '').substring(0, 150),
-        likes,
-        comments,
-        shares,
-        views,
-        engagement,
+        likes, comments, shares, views, engagement,
         publishedAt: p.date || p.time || p.publishedAt || '',
       };
     }).sort((a: any, b: any) => b.engagement - a.engagement);
 
     const totalReach = topPosts.reduce((s: number, p: any) => s + (p.views || p.engagement), 0);
-    const totalEngagement = topPosts.reduce((s: number, p: any) => s + p.engagement, 0);
-    const avgEngagement = totalReach > 0 ? (totalEngagement / topPosts.length) : 0;
+    const totalEng = topPosts.reduce((s: number, p: any) => s + p.engagement, 0);
 
     return {
       profileStats: {
-        followers: 0, // Not available from posts scraper — needs Graph API token
-        pageLikes: 0, // Not available from posts scraper — needs Graph API token
+        followers: 0,
+        pageLikes: 0,
         totalReach,
-        avgEngagement: topPosts.length > 0 ? totalEngagement / topPosts.length : 0,
+        avgEngagement: topPosts.length > 0 ? totalEng / topPosts.length : 0,
       },
       topPosts,
-      status: { 
-        connected: true, 
-        note: 'Page follower count requires Facebook Graph API token. See setup instructions below.' 
-      },
+      status: { connected: true, note: 'Page follower count requires Facebook Graph API token.' },
     };
   } catch (err: any) {
     return { status: { connected: false, error: err.message } };
@@ -435,11 +378,11 @@ export async function GET(request: Request) {
   ]);
 
   return NextResponse.json({
-    youtube: youtube.status === 'fulfilled' ? youtube.value : { status: { connected: false, error: String(youtube.reason) } },
-    podcast: podcast.status === 'fulfilled' ? podcast.value : { status: { connected: false, error: String(podcast.reason) } },
-    instagram: instagram.status === 'fulfilled' ? instagram.value : { status: { connected: false, error: String(instagram.reason) } },
-    tiktok: tiktok.status === 'fulfilled' ? tiktok.value : { status: { connected: false, error: String(tiktok.reason) } },
-    facebook: facebook.status === 'fulfilled' ? facebook.value : { status: { connected: false, error: String(facebook.reason) } },
+    youtube: youtube.status === 'fulfilled' ? youtube.value : { status: { connected: false, error: String((youtube as any).reason) } },
+    podcast: podcast.status === 'fulfilled' ? podcast.value : { status: { connected: false, error: String((podcast as any).reason) } },
+    instagram: instagram.status === 'fulfilled' ? instagram.value : { status: { connected: false, error: String((instagram as any).reason) } },
+    tiktok: tiktok.status === 'fulfilled' ? tiktok.value : { status: { connected: false, error: String((tiktok as any).reason) } },
+    facebook: facebook.status === 'fulfilled' ? facebook.value : { status: { connected: false, error: String((facebook as any).reason) } },
     generatedAt: new Date().toISOString(),
   });
 }
