@@ -216,7 +216,7 @@ async function fetchInstagram() {
   const actorConfigs = [
     {
       actor: 'apify~instagram-scraper',
-      body: { directUrls: ['https://www.instagram.com/jeffkrasno/'], resultsLimit: 12, resultsType: 'posts' },
+      body: { directUrls: ['https://www.instagram.com/jeffkrasno/'], resultsLimit: 1, resultsType: 'details' },
     },
     {
       actor: 'apify~instagram-profile-scraper',
