@@ -556,7 +556,7 @@ export default function Dashboard() {
         {/* Summary Row */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <StatCard label="YouTube Subscribers" value={fmt(yt.channelStats?.subscribers||0)} sub={fmt(yt.channelStats?.totalViews||0)+' total views'} icon={Youtube}/>
-          <StatCard label="Podcast Episodes" value={fmt(pod.totalEpisodes||0)} sub={pod.channelTitle||''} icon={Mic}/>
+          <StatCard label="Podcast Episodes" value={fmt(pod.podcastStats?.totalEpisodes||0)} sub={pod.podcastName||''} icon={Mic}/>
           <StatCard label="Instagram" value={ig.status?.connected ? fmt(ig.profileStats?.followers||0) : 'Not Connected'} sub={ig.status?.connected ? 'followers' : ''} icon={Instagram}/>
           <StatCard label="TikTok" value={tt.status?.connected ? fmt(tt.profileStats?.followers||0) : 'Not Connected'} sub={tt.status?.connected ? 'followers' : ''} icon={TrendingUp}/>
         </div>
