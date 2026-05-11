@@ -296,8 +296,8 @@ async function fetchTikTok() {
 
       // Find the profile-level item (has followerCount) vs post items
       const profileItem = items.find((i: any) => i.followerCount !== undefined || i.stats?.followerCount !== undefined);
-          const followers = profileItem?.followerCount || profileItem?.stats?.followerCount || 0;
-          const following = profileItem?.followingCount || profileItem?.stats?.followingCount || 0;
+          const followers = profileItem?.followerCount || profileItem?.stats?.followerCount || items[0]?.authorMeta?.fans || items[0]?.author?.followerCount || 0;
+          const following = profileItem?.followingCount || profileItem?.stats?.followingCount || items[0]?.authorMeta?.following || 0;
 
       // Filter to post items (have playCount / videoMeta)
       const postItems = items.filter((i: any) =>
