@@ -249,9 +249,9 @@ function PodcastSection({ data, expanded, onToggle }: any) {
             <>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <StatCard label="Total Episodes" value={fmt(podcastStats.totalEpisodes||0)} icon={Mic}/>
-                <StatCard label="Total Downloads" value={fmt(podcastStats.totalDownloads||0)} sub="last 12 months" icon={Download}/>
-                <StatCard label="Total Streams" value={fmt(podcastStats.totalStreams||0)} sub="last 12 months" icon={Radio}/>
-                <StatCard label="Avg Listen Time" value={fmtTime(podcastStats.avgConsumptionTime||0)} icon={Headphones}/>
+                <StatCard label="Total Downloads" value={podcastStats.hasAnalytics ? fmt(podcastStats.totalDownloads||0) : '--'} sub={podcastStats.hasAnalytics ? "last 12 months" : "analytics unavailable"} icon={Download}/>
+                <StatCard label="Total Streams" value={podcastStats.hasAnalytics ? fmt(podcastStats.totalStreams||0) : '--'} sub={podcastStats.hasAnalytics ? "last 12 months" : "analytics unavailable"} icon={Radio}/>
+                <StatCard label="Avg Listen Time" value={podcastStats.hasAnalytics ? fmtTime(podcastStats.avgConsumptionTime||0) : '--'} icon={Headphones}/>
               </div>
 
               <div>
