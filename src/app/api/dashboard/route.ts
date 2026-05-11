@@ -67,14 +67,49 @@ async function fetchYouTube() {
 
 // — Megaphone ——————————————————————————————————————————————
 async function fetchPodcast(megaphoneApiKey?: string) {
-  const RSS_URL = 'https://feeds.megaphone.fm/SWDG4803951965';
   const NETWORK_ID = '92d07666-568b-11f0-905f-27d2b3e735f9';
+  const PODCAST_UID = '83bda43e-5846-11f0-9c25-6747adca5027';
+  // Try multiple RSS URL formats
+  const RSS_URLS = [
+    `https://feeds.megaphone.fm/${PODCAST_UID}`,
+    'https://feeds.megaphone.fm/SWDG4803951965',
+    `https://feeds.megaphone.fm/podcasts/${PODCAST_UID}`,
+  ];
   const apiToken = megaphoneApiKey || process.env.MEGAPHONE_API_TOKEN;
 
   try {
-    const rssRes = await fetch(RSS_URL, { cache: 'no-store' });
-    if (!rssRes.ok) throw new Error(`RSS feed error: ${rssRes.status}`);
-    const rssText = await rssRes.text();
+    // Try each RSS URL until one works
+    let rssText = '';
+    for (const rssUrl of RSS_URLS) {
+      try {
+        const rssRes = await fetch(rssUrl, { cache: 'no-store' });
+        if (rssRes.ok) {
+          rssText = await rssRes.text();
+          break;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    // If RSS failed, try Megaphone API directly for episode list
+    if (!rssText && apiToken) {
+      const podRes = await fetch(
+        `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts`,
+        { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
+      );
+      if (podRes.ok) {
+        const pods = await podRes.json();
+        const pod = Array.isArray(pods) ? pods[0] : pods?.podcasts?.[0];
+        const feedUrl = pod?.feedUrl || pod?.rssUrl;
+        if (feedUrl) {
+          const fr = await fetch(feedUrl, { cache: 'no-store' });
+          if (fr.ok) rssText = await fr.text();
+        }
+      }
+    }
+
+    if (!rssText) throw new Error('Could not load podcast RSS feed');
 
     const items = rssText.match(/<item>[\s\S]*?<\/item>/g) || [];
     const parseTag = (xml: string, tag: string) => {
@@ -321,14 +356,24 @@ async function fetchFacebook() {
 
     const topPosts = items.map((p: any) => {
       let thumbnail = '';
+      // Try all possible image fields from Apify facebook-posts-scraper
       if (p.media && p.media.length > 0) {
         thumbnail = p.media[0]?.photo?.imageUrl || p.media[0]?.video?.thumbnailUrl ||
                     p.media[0]?.imageUrl || p.media[0]?.url || '';
       }
-      if (!thumbnail) thumbnail = p.imageUrl || p.photo?.imageUrl || p.thumbnailUrl || p.videoThumbnailUrl || '';
       if (!thumbnail && p.attachments?.length > 0) {
-        thumbnail = p.attachments[0]?.media?.image?.src || p.attachments[0]?.imageUrl || '';
+        thumbnail = p.attachments[0]?.media?.image?.src || p.attachments[0]?.imageUrl ||
+                    p.attachments[0]?.url || '';
       }
+      if (!thumbnail) {
+        thumbnail = p.imageUrl || p.photo?.imageUrl || p.thumbnailUrl ||
+                    p.videoThumbnailUrl || p.previewImage?.url || '';
+      }
+      // Ensure it's a real image URL (not a Facebook page URL)
+      if (thumbnail && !thumbnail.startsWith('http')) thumbnail = '';
+      if (thumbnail && (thumbnail.includes('facebook.com/reel') ||
+          thumbnail.includes('facebook.com/jeffpatrick') ||
+          thumbnail.includes('facebook.com/videos'))) thumbnail = '';
 
       const likes = p.likes || p.reactions?.like || 0;
       const comments = p.comments || p.commentsCount || 0;
@@ -385,4 +430,4 @@ export async function GET(request: Request) {
     facebook: facebook.status === 'fulfilled' ? facebook.value : { status: { connected: false, error: String((facebook as any).reason) } },
     generatedAt: new Date().toISOString(),
   });
-}
+        }
