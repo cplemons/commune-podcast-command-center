@@ -132,7 +132,7 @@ async function fetchPodcast() {
         title: ep.title,
         description: ep.summary || ep.subtitle || '',
         audioUrl: ep.audioUrl || ep.original_url,
-        duration: ep.duration,
+        duration: ep.duration ? Math.round(ep.duration / 60) : 0,
         publishedAt: ep.pubdate || ep.publishedAt,
         thumbnail: ep.imageUrl || communePodcast.imageUrl,
         totalDownloads: analytics.totalDownloads || 0,
