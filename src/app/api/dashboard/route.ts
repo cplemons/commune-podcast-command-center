@@ -212,8 +212,8 @@ async function fetchInstagram() {
 
   const username = 'jeffkrasno';
     try {
-          // apify/instagram-scraper with resultsType=details returns {followersCount, postsCount, latestPosts:[...]}
-      const items = await runApifyActor('apify/instagram-scraper', {
+          // apify~instagram-scraper with resultsType=details returns {followersCount, postsCount, latestPosts:[...]}
+      const items = await runApifyActor('apify~instagram-scraper', {
               directUrls: [`https://www.instagram.com/${username}/`],
               resultsType: 'details',
               resultsLimit: 12,
@@ -271,14 +271,14 @@ async function fetchTikTok() {
 
   const username = 'jeffkrasno';
     try {
-          // Try clockworks/free-tiktok-scraper first, fallback to other free actors
+          // Try clockworks~free-tiktok-scraper first, fallback to other free actors
       let items: any[] = [];
           let lastError = '';
 
       const actors = [
-        { id: 'clockworks/free-tiktok-scraper', input: { profiles: [username], resultsPerPage: 20 } },
-        { id: 'novi/fast-tiktok-api', input: { username, maxItems: 20 } },
-        { id: 'clockworks/tiktok-scraper', input: { profiles: [`https://www.tiktok.com/@${username}`], resultsPerPage: 20 } },
+        { id: 'clockworks~free-tiktok-scraper', input: { profiles: [username], resultsPerPage: 20 } },
+        { id: 'novi~fast-tiktok-api', input: { username, maxItems: 20 } },
+        { id: 'clockworks~tiktok-scraper', input: { profiles: [`https://www.tiktok.com/@${username}`], resultsPerPage: 20 } },
             ];
 
       for (const actor of actors) {
@@ -346,7 +346,7 @@ async function fetchFacebook() {
   const pageUrl = 'https://www.facebook.com/jeffpatrickkrasno';
     try {
           // Use facebook-posts-scraper to get posts with engagement data
-      const items = await runApifyActor('apify/facebook-posts-scraper', {
+      const items = await runApifyActor('apify~facebook-posts-scraper', {
               startUrls: [{ url: pageUrl }],
               maxPosts: 20,
               maxPostComments: 0,
