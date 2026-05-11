@@ -199,7 +199,7 @@ function SocialSection({ data, platform, icon: Icon, color, expanded, onToggle }
                       <div key={p.id||i} className="bg-[#1a1612] rounded-xl overflow-hidden hover:bg-[#201c18] transition-colors cursor-pointer group" onClick={() => setModal(p)}>
                         <div className="relative aspect-video bg-[#0d0a06]">
                           {p.thumbnail ? (
-                            <img src={p.thumbnail} alt="" className="w-full h-full object-cover" onError={e => (e.currentTarget.style.display='none')}/>
+                            <img src={p.thumbnail ? `/api/proxy/image?url=${encodeURIComponent(p.thumbnail)}` : ''} alt="" className="w-full h-full object-cover" onError={e => (e.currentTarget.style.display='none')}/>
                           ) : (
                             <div className="w-full h-full flex items-center justify-center"><Icon size={24} style={{color}} className="opacity-30"/></div>
                           )}
