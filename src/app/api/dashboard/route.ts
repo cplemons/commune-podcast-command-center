@@ -207,61 +207,93 @@ async function fetchPodcast() {
   }
 }
 
-// Instagram via Apify - proxy thumbnails to avoid CDN blocking
+// Instagram via Apify - try multiple free actors
 async function fetchInstagram() {
   const apifyToken = process.env.APIFY_API_TOKEN;
   if (!apifyToken) return { status: { connected: false, error: 'APIFY_API_TOKEN not configured' } };
-  try {
-    const runRes = await fetch(
-      `https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=55`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ usernames: ['jeffkrasno'], resultsLimit: 12 }),
-        cache: 'no-store',
+  
+  // List of actors to try (in order of preference, free tier)
+  const actorConfigs = [
+    {
+      actor: 'apify~instagram-scraper',
+      body: { directUrls: ['https://www.instagram.com/jeffkrasno/'], resultsLimit: 12, resultsType: 'posts' },
+    },
+    {
+      actor: 'apify~instagram-profile-scraper',
+      body: { usernames: ['jeffkrasno'], resultsLimit: 12 },
+    },
+    {
+      actor: 'zuzka~instagram-profile-follower-scraper',
+      body: { usernames: ['jeffkrasno'] },
+    },
+  ];
+  
+  let lastError = '';
+  for (const config of actorConfigs) {
+    try {
+      const runRes = await fetch(
+        `https://api.apify.com/v2/acts/${config.actor}/run-sync-get-dataset-items?token=${apifyToken}&timeout=55`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config.body),
+          cache: 'no-store',
+        }
+      );
+      if (!runRes.ok) {
+        lastError = `Apify ${config.actor} error: ${runRes.status}`;
+        continue; // Try next actor
       }
-    );
-    if (!runRes.ok) throw new Error(`Apify Instagram error: ${runRes.status}`);
-    const data = await runRes.json();
-    if (!data?.length) throw new Error('No Instagram data returned');
-    const profile = data[0];
+      const data = await runRes.json();
+      if (!data?.length) {
+        lastError = `No data from ${config.actor}`;
+        continue;
+      }
+      
+      // Process based on response format
+      const profile = data[0];
+      const followers = typeof profile.followersCount === 'number'
+        ? profile.followersCount
+        : parseInt(String(profile.followersCount || '0').replace(/[^0-9]/g, '')) || 0;
+      const posts = profile.postsCount || profile.mediaCount || 0;
+      
+      // Posts can be in different locations depending on the actor
+      const rawPosts = profile.latestPosts || profile.posts || profile.topPosts
+        || (Array.isArray(data) && data.length > 1 ? data : []);
+      const recentPosts = rawPosts.slice(0, 12);
+      
+      const totalViews = recentPosts.reduce((s: number, p: any) =>
+        s + (p.videoPlayCount || p.videoViewCount || p.likesCount || 0), 0);
+      const avgEngagement = recentPosts.length > 0 && followers > 0
+        ? recentPosts.reduce((s: number, p: any) => {
+            const likes = p.likesCount || p.likes || 0;
+            const comments = p.commentsCount || p.comments || 0;
+            return s + ((likes + comments) / followers * 100);
+          }, 0) / recentPosts.length
+        : 0;
 
-    const followers = typeof profile.followersCount === 'number'
-      ? profile.followersCount
-      : parseInt(String(profile.followersCount || '0').replace(/[^0-9]/g, '')) || 0;
-    const posts = profile.postsCount || 0;
-    const recentPosts = (profile.latestPosts || profile.posts || profile.edges || []).slice(0, 12);
+      const topPosts = recentPosts.map((p: any) => ({
+        id: p.id || p.shortCode,
+        url: p.url || p.link || `https://instagram.com/p/${p.shortCode}`,
+        thumbnail: p.displayUrl || p.imageUrl || p.thumbnailUrl || p.previewUrl || p.image || '',
+        caption: (p.caption || p.text || p.description || '').substring(0, 120),
+        likes: p.likesCount || p.likes || 0,
+        comments: p.commentsCount || p.comments || 0,
+        views: p.videoPlayCount || p.videoViewCount || p.likesCount || 0,
+        type: p.type || p.productType || 'image',
+      }));
 
-    const totalViews = recentPosts.reduce((s: number, p: any) =>
-      s + (p.videoPlayCount || p.videoViewCount || p.likesCount || 0), 0);
-    const avgEngagement = recentPosts.length > 0 && followers > 0
-      ? recentPosts.reduce((s: number, p: any) => {
-          const likes = p.likesCount || 0;
-          const comments = p.commentsCount || 0;
-          return s + ((likes + comments) / followers * 100);
-        }, 0) / recentPosts.length
-      : 0;
-
-    const topPosts = recentPosts.map((p: any) => ({
-      id: p.id || p.shortCode,
-      url: p.url || `https://instagram.com/p/${p.shortCode}`,
-      // Use /api/proxy/image to serve Instagram CDN images server-side
-      thumbnail: p.displayUrl || p.imageUrl || p.thumbnailUrl || p.previewUrl || '',
-      caption: (p.caption || p.text || '').substring(0, 120),
-      likes: p.likesCount || 0,
-      comments: p.commentsCount || 0,
-      views: p.videoPlayCount || p.videoViewCount || p.likesCount || 0,
-      type: p.type || p.productType || 'image',
-    }));
-
-    return {
-      profileStats: { followers, totalViews, avgEngagement, posts },
-      topPosts,
-      status: { connected: true, lastUpdated: new Date().toISOString() },
-    };
-  } catch (e: any) {
-    return { status: { connected: false, error: e.message } };
+      return {
+        profileStats: { followers, totalViews, avgEngagement, posts },
+        topPosts,
+        status: { connected: true, lastUpdated: new Date().toISOString() },
+      };
+    } catch (e: any) {
+      lastError = e.message;
+    }
   }
+  
+  return { status: { connected: false, error: lastError || 'All Instagram actors failed' } };
 }
 
 // TikTok via Apify - use free actor
