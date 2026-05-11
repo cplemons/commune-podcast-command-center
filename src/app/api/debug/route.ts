@@ -10,7 +10,6 @@ export async function GET() {
 
   const results: Record<string, any> = {};
   
-  // Get podcasts first
   const podRes = await fetch(
     `https://cms.megaphone.fm/api/networks/${networkId}/podcasts`,
     { headers: { 'Authorization': `Token token=${token}` }, cache: 'no-store' }
@@ -27,33 +26,43 @@ export async function GET() {
   if (!pod) return NextResponse.json(results);
   
   const podId = pod.id;
-  const now = new Date();
-  const start = new Date(now);
-  start.setFullYear(start.getFullYear() - 1);
-  const startStr = start.toISOString().split('T')[0];
-  const endStr = now.toISOString().split('T')[0];
   
-  // Get one episode to test per-episode analytics
+  // Get top 5 episodes with all fields to see preCount/postCount values
   const epRes = await fetch(
-    `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podId}/episodes?per=3`,
+    `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podId}/episodes?per=5`,
     { headers: { 'Authorization': `Token token=${token}` }, cache: 'no-store' }
   );
   const eps = await epRes.json();
   const epList = Array.isArray(eps) ? eps : (eps.episodes || []);
-  const firstEpId = epList[0]?.id;
   
-  results.firstEpisode = { id: firstEpId, title: epList[0]?.title };
+  // Show episode data including preCount/postCount
+  results.episodeSample = epList.map((ep: any) => ({
+    id: ep.id?.substring(0, 20),
+    title: ep.title?.substring(0, 60),
+    pubdate: ep.pubdate?.substring(0, 10),
+    duration: ep.duration,
+    preCount: ep.preCount,
+    postCount: ep.postCount,
+    size: ep.size,
+    spotifyStatus: ep.spotifyStatus,
+    status: ep.status,
+  }));
+  
   results.episodeFields = epList[0] ? Object.keys(epList[0]) : [];
   
-  // Test various analytics endpoints
-  const endpoints = [
+  // Test analytics-style endpoints  
+  const now = new Date();
+  const start = new Date(now); start.setFullYear(start.getFullYear() - 1);
+  const startStr = start.toISOString().split('T')[0];
+  const endStr = now.toISOString().split('T')[0];
+  const firstEpId = epList[0]?.id;
+  
+  const endpoints: string[] = [
     `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podId}/episodes/analytics?start=${startStr}&end=${endStr}&per=3`,
     `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podId}/downloads?start=${startStr}&end=${endStr}`,
-    `https://cms.megaphone.fm/api/networks/${networkId}/podcasts/${podId}/analytics?start=${startStr}&end=${endStr}`,
     `https://cms.megaphone.fm/api/networks/${networkId}/episodes/${firstEpId}/downloads?start=${startStr}&end=${endStr}`,
-    `https://cms.megaphone.fm/api/networks/${networkId}/episodes/${firstEpId}/analytics`,
-    `https://cms.megaphone.fm/api/networks/${networkId}/downloads?start=${startStr}&end=${endStr}`,
-    `https://cms.megaphone.fm/api/networks/${networkId}/analytics?start=${startStr}&end=${endStr}`,
+    `https://cms.megaphone.fm/api/networks/${networkId}/episodes/${firstEpId}/stats`,
+    `https://cms.megaphone.fm/api/v2/networks/${networkId}/podcasts/${podId}/episodes/analytics?start=${startStr}&end=${endStr}`,
   ];
   
   const endpointResults: any[] = [];
@@ -63,15 +72,15 @@ export async function GET() {
         headers: { 'Authorization': `Token token=${token}` }, cache: 'no-store'
       });
       let body: any = null;
-      try { body = await r.json(); } catch(_) { body = await r.text().catch(() => 'unreadable'); }
+      try { body = await r.json(); } catch(_) {}
       endpointResults.push({
         status: r.status,
-        url: url.replace(networkId, 'NETWORK_ID').replace(podId, 'POD_ID').replace(firstEpId || 'EP', 'EP_ID'),
-        bodyPreview: typeof body === 'string' ? body.substring(0, 200) : JSON.stringify(body).substring(0, 200),
-        bodyKeys: Array.isArray(body) ? ['array:' + body.length, ...(body[0] ? Object.keys(body[0]) : [])] : (typeof body === 'object' && body ? Object.keys(body) : ['string']),
+        path: url.split('/api/').pop()?.replace(networkId, 'NID').replace(podId, 'PID').replace(firstEpId || '', 'EID'),
+        bodyPreview: body ? JSON.stringify(body).substring(0, 150) : 'empty',
+        bodyKeys: Array.isArray(body) ? ['array:' + body.length, ...(body[0] ? Object.keys(body[0]).slice(0, 10) : [])] : (body && typeof body === 'object' ? Object.keys(body) : []),
       });
     } catch(e: any) {
-      endpointResults.push({ error: e.message, url });
+      endpointResults.push({ error: e.message, path: url.split('/').slice(-3).join('/') });
     }
   }
   
