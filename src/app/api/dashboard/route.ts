@@ -78,7 +78,7 @@ async function fetchInstagram() {
 
             // Account Data V2 (POST) returns user + posts with like_count, comment_count, video_view_count
                       const res = await fetch(`https://${host}/ig_get_fb_profile_hover.php?username_or_url=jeffkrasno`, { headers: jsonHeaders, cache: 'no-store' });
-                                    hrow new Error(`Instagram API error: ${res.status}`);
+                                    throw new Error(`Instagram API error: ${res.status}`);
                       const data = await res.json();
 
             // Try Account Data V2 response shape first, then fall back to profile hover shape
