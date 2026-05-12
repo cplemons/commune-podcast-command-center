@@ -161,49 +161,40 @@ async function fetchTikTok() {
 }
 
 async function fetchFacebook() {
-          const rapidApiKey = process.env.RAPIDAPI_KEY;
-          if (!rapidApiKey) return { status: { connected: false, error: 'RAPIDAPI_KEY not configured' } };
-          const host = 'facebook-scraper-api4.p.rapidapi.com';
-          const headers = { 'x-rapidapi-host': host, 'x-rapidapi-key': rapidApiKey, 'Content-Type': 'application/json' };
-        const attempts = [
-         `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?profile_id=100032044192242&count=20`,
-        ];
-          let rawPosts: any[] = [];
-          let pageInfo: any = {};
-          const debugLog: string[] = [];
-          for (const url of attempts) {
-                      try {
-                                    const res = await fetch(url, { headers, cache: 'no-store' });
-                                    const statusCode = res.status;
-                                    if (!res.ok) { debugLog.push(`${statusCode}:${url.split('?')[0].split('/').pop()}`); continue; }
-                                    const json = await res.json();
-                                    const topLevelKeys = Object.keys(json).join(',');
-                                    const posts = json?.data?.posts || json?.posts || json?.results || json?.items || [];
-                                    pageInfo = json?.page || json?.page_info || json?.meta || {};
-                                    debugLog.push(`200:keys=${topLevelKeys}:posts=${Array.isArray(posts) ? posts.length : 'N'}`);
-                                    if (Array.isArray(posts) && posts.length > 0) { rawPosts = posts; break; }
-                                    if (Array.isArray(json) && json.length > 0) { rawPosts = json; break; }
-                      } catch (e: any) { debugLog.push(`ERR:${e.message}`); }
-          }
-          if (rawPosts.length === 0) {
-                      return { status: { connected: false, error: `Facebook no data. ${debugLog.join(' | ')}` } };
-          }
-          const followers = Number(pageInfo?.followers_count || pageInfo?.fan_count || pageInfo?.followers || 0);
-          const pageLikes = Number(pageInfo?.fan_count || pageInfo?.likes || followers);
-          const topPosts = rawPosts.map((p: any) => {
-                      const likes = Number(p?.reactions?.total_count || p?.likes?.count || p?.like_count || p?.reactions || 0);
-                      const comments = Number(p?.comments?.total_count || p?.comments?.count || p?.comment_count || 0);
-                      const shares = Number(p?.shares?.count || p?.share_count || p?.shares || 0);
-                      const reach = Number(p?.insights?.reach || p?.reach || 0);
-                      const engagementScore = likes + comments + shares;
-                      const thumbnail = p?.full_picture || p?.picture || p?.attachments?.[0]?.media?.image?.src || '';
-                      const isBadUrl = thumbnail && thumbnail.includes('facebook.com/') && !thumbnail.includes('fbcdn') && !thumbnail.includes('akamaihd');
-                      return { id: p?.post_id || p?.id || '', caption: p?.message || p?.story || p?.description || '', thumbnail: (thumbnail && !isBadUrl) ? `/api/proxy/image?url=${encodeURIComponent(thumbnail)}` : '', likes, comments, shares, reach, engagementScore, publishedAt: p?.created_time || p?.timestamp || p?.date || '', url: p?.post_url || p?.permalink_url || '' };
-          }).sort((a: any, b: any) => b.engagementScore - a.engagementScore);
-          const totalReach = topPosts.reduce((s: number, p: any) => s + p.reach, 0);
-          const avgEngagement = topPosts.length > 0 ? topPosts.reduce((s: number, p: any) => s + p.engagementScore, 0) / topPosts.length : 0;
-          return { profileStats: { followers, pageLikes, totalReach, avgEngagement }, topPosts, status: { connected: true } };
-}
+  const rapidApiKey = process.env.RAPIDAPI_KEY;
+  if (!rapidApiKey) return { status: { connected: false, error: 'RAPIDAPI_KEY not configured' } };
+
+  try {
+    const res = await fetch(
+      'https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?profile_id=100032044192242&count=20',
+      {
+        headers: {
+          'x-rapidapi-host': 'facebook-scraper-api4.p.rapidapi.com',
+          'x-rapidapi-key': rapidApiKey,
+        },
+        cache: 'no-store',
+      }
+    );
+
+    if (!res.ok) return { status: { connected: false, error: `API error: ${res.status}` } };
+
+    const json = await res.json();
+    const rawPosts = json?.data?.posts || [];
+
+    if (rawPosts.length === 0) return { status: { connected: false, error: 'No posts returned' } };
+
+    const topPosts = rawPosts.map((p: any) => ({
+      id: p?.details?.post_id || '',
+      url: p?.details?.post_link || '',
+      caption: p?.details?.post_text || p?.message || '',
+      likes: Number(p?.reactions?.total_count || p?.likes || 0),
+      comments: Number(p?.comments?.total_count || p?.comments_count || 0),
+      shares: Number(p?.shares?.count || p?.shares || 0),
+      thumbnail: p?.attachment?.media?.image?.src || p?.full_picture || '',
+      timestamp: p?.details?.creation_time || p?.created_time || '',
+      engagementRate: 0,
+    }))
+    .sort((a: any, b: any) => (b.likes + b.comments) - (a.likes + a.comments)
 
 export async function GET(request: Request) {
           const { searchParams } = new URL(request.url);
