@@ -38,30 +38,70 @@ async function fetchYouTube() {
 }
 
 async function fetchPodcast(megaphoneApiKey?: string) {
-          const NETWORK_ID = '92d07666-568b-11f0-905f-27d2b3e735f9';
-          const PODCAST_ID = '83bda43e-5846-11f0-9c25-6747adca5027';
-          const apiToken = megaphoneApiKey || process.env.MEGAPHONE_API_TOKEN;
-          if (apiToken) {
-                      try {
-                                    const epsRes = await fetch(`https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=100&include_downloads=true&include_streams=true`, { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' });
-                                    if (epsRes.ok) {
-                                                    const epsData = await epsRes.json();
-                                                    const apiEpisodes = Array.isArray(epsData) ? epsData : epsData?.episodes || [];
-                                                    if (apiEpisodes.length > 0) {
-                                                                      const episodes = apiEpisodes.map((ep: any) => {
-                                                                                          const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
-                                                                                          const downloads = Number(ep.cleanDownloads || ep.downloads || ep.totalDownloads || ep.download_count || ep.preCount || ep.lifetimeDownloads || ep.lifetime_downloads || 0);
-                                                                                         const streams = ep.streams || ep.totalStreams || ep.stream_count || 0;
-                                                                                          return { id: ep.id || ep.uid, title: ep.title, publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '', duration: Math.floor(durationSecs / 60), audioUrl: ep.enclosureUrl || ep.audioUrl || '', thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '', downloads, streams, delivered: ep.delivered || ep.totalDelivered || (downloads + streams), performanceScore: downloads + streams };
-                                                                      });
-                                                                      const hasAnalytics = episodes.some((e: any) => e.downloads > 0 || e.streams > 0);
-                                                                      const topEpisodes = hasAnalytics ? [...episodes].sort((a: any, b: any) => b.performanceScore - a.performanceScore) : episodes;
-                                                                      return { podcastName: 'Commune with Jeff Krasno', topEpisodes, episodes: topEpisodes, analyticsAvailable: hasAnalytics, apiKeyConfigured: true, totalDownloads: hasAnalytics ? episodes.reduce((s: number, e: any) => s + e.downloads, 0) : null, totalStreams: hasAnalytics ? episodes.reduce((s: number, e: any) => s + e.streams, 0) : null, status: { connected: true } };
-                                                    }
-                                    }
-                      } catch (apiErr: any) { console.error('Megaphone API error:', apiErr.message); }
-          }
-          return { podcastName: 'Commune with Jeff Krasno', topEpisodes: [], episodes: [], analyticsAvailable: false, apiKeyConfigured: !!apiToken, totalDownloads: null, totalStreams: null, status: { connected: false, error: 'No API key available' } };
+  const NETWORK_ID = '92d07666-568b-11f0-905f-27d2b3e735f9';
+  const PODCAST_ID = '83bda43e-5846-11f0-9c25-6747adca5027';
+  const apiToken = megaphoneApiKey || process.env.MEGAPHONE_API_TOKEN;
+  if (!apiToken) return { podcastName: 'Commune with Jeff Krasno', topEpisodes: [], episodes: [], analyticsAvailable: false, apiKeyConfigured: false, totalDownloads: null, totalStreams: null, status: { connected: false, error: 'No API key available' } };
+
+  try {
+    const epsRes = await fetch(
+      `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=100`,
+      { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
+    );
+    if (!epsRes.ok) throw new Error(`Megaphone episodes error: ${epsRes.status}`);
+    const epsData = await epsRes.json();
+    const apiEpisodes = Array.isArray(epsData) ? epsData : epsData?.episodes || [];
+    if (apiEpisodes.length === 0) throw new Error('No episodes returned');
+
+    const top20 = apiEpisodes.slice(0, 20);
+
+    const episodes = await Promise.all(top20.map(async (ep: any) => {
+      const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
+      let downloads = 0;
+      let streams = 0;
+      try {
+        const analyticsRes = await fetch(
+          `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes/${ep.id}/analytics`,
+          { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
+        );
+        if (analyticsRes.ok) {
+          const analyticsData = await analyticsRes.json();
+          downloads = Number(analyticsData?.downloads || analyticsData?.total_downloads || analyticsData?.cleanDownloads || 0);
+          streams = Number(analyticsData?.streams || analyticsData?.total_streams || 0);
+        }
+      } catch {}
+      return {
+        id: ep.id || ep.uid,
+        title: ep.title,
+        publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '',
+        duration: Math.floor(durationSecs / 60),
+        audioUrl: ep.enclosureUrl || ep.audioUrl || '',
+        thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '',
+        downloads,
+        streams,
+        delivered: downloads + streams,
+        performanceScore: downloads + streams,
+      };
+    }));
+
+    const sorted = [...episodes].sort((a: any, b: any) => b.performanceScore - a.performanceScore);
+    const totalDownloads = episodes.reduce((s: number, e: any) => s + e.downloads, 0);
+    const totalStreams = episodes.reduce((s: number, e: any) => s + e.streams, 0);
+    const hasAnalytics = totalDownloads > 0 || totalStreams > 0;
+
+    return {
+      podcastName: 'Commune with Jeff Krasno',
+      topEpisodes: sorted,
+      episodes: sorted,
+      analyticsAvailable: hasAnalytics,
+      apiKeyConfigured: true,
+      totalDownloads: hasAnalytics ? totalDownloads : null,
+      totalStreams: hasAnalytics ? totalStreams : null,
+      status: { connected: true },
+    };
+  } catch (apiErr: any) {
+    return { podcastName: 'Commune with Jeff Krasno', topEpisodes: [], episodes: [], analyticsAvailable: false, apiKeyConfigured: !!apiToken, totalDownloads: null, totalStreams: null, status: { connected: false, error: apiErr.message } };
+  }
 }
 
 // Instagram - uses Account Data V2 (POST) which returns posts with engagement metrics
