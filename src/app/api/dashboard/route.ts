@@ -78,7 +78,7 @@ async function fetchInstagram() {
 
             // Account Data V2 (POST) returns user + posts with like_count, comment_count, video_view_count
             const body = new URLSearchParams({ username_or_url: 'jeffkrasno' }).toString();
-                      const res = await fetch(`https://${host}/ig_get_user_account_data_v2.php`, {
+                      const res = await fetch(`https://${host}/ig_get_user_account_data.php`, {
                                     method: 'POST',
                                     headers,
                                     body,
