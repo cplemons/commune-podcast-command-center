@@ -105,7 +105,17 @@ function analyzeContent(data: DashData) {
   if (igPosts.length > 0) {
     igPosts.forEach(p => { const g = extractGuest(p.caption); if (g) addGuest(g, p.views||p.likes, 'Instagram'); addTopic(p.caption, p.views||p.likes); });
     const s = [...igPosts].sort((a,b) => (b.views||b.likes) - (a.views||a.likes));
-    extremes.push({ platform: 'Instagram', best: { title: s[0].caption, value: s[0].views||s[0].likes, metric: s[0].views>0?'views':'likes' }, worst: { title: s[s.length-1].caption, value: s[s.length-1].views||s[s.length-1].likes, metric: 'engagement' } });
+    const bestMetric = s[0].views > 0 ? 'views' : 'likes';
+    const bestValue = s[0].views > 0 ? s[0].views : s[0].likes;
+    const worstMetric = s[s.length-1].views > 0 ? 'views' : 'likes';
+    const worstValue = s[s.length-1].views > 0 ? s[s.length-1].views : s[s.length-1].likes;
+    if (bestValue > 0) {
+      extremes.push({
+        platform: 'Instagram',
+        best: { title: s[0].caption, value: bestValue, metric: bestMetric },
+        worst: { title: s[s.length-1].caption, value: worstValue, metric: worstMetric },
+      });
+    }
   }
   const ttPosts = data.tiktok?.topPosts || [];
   if (ttPosts.length > 0) {
@@ -114,10 +124,21 @@ function analyzeContent(data: DashData) {
     extremes.push({ platform: 'TikTok', best: { title: s[0].caption, value: s[0].views, metric: 'views' }, worst: { title: s[s.length-1].caption, value: s[s.length-1].views, metric: 'views' } });
   }
   const eps = data.podcast?.topEpisodes || data.podcast?.episodes || [];
-  if (eps.length > 0 && data.podcast?.analyticsAvailable) {
-    eps.forEach(ep => { const g = extractGuest(ep.title); if (g) addGuest(g, ep.downloads+ep.streams, 'Podcast'); addTopic(ep.title, ep.downloads+ep.streams); });
-    const s = [...eps].sort((a,b) => (b.downloads+b.streams)-(a.downloads+a.streams));
-    if (s[0].downloads > 0) extremes.push({ platform: 'Podcast', best: { title: s[0].title, value: s[0].downloads+s[0].streams, metric: 'downloads' }, worst: { title: s[s.length-1].title, value: s[s.length-1].downloads+s[s.length-1].streams, metric: 'downloads' } });
+  if (eps.length > 0) {
+    // Always extract guest names and topics from podcast episode titles,
+    // regardless of whether download analytics are available.
+    // Use downloads+streams as the performance signal when available, else rank equally (1).
+    const hasAnalytics = data.podcast?.analyticsAvailable === true;
+    eps.forEach(ep => {
+      const perf = hasAnalytics ? (ep.downloads + ep.streams) : 1;
+      const g = extractGuest(ep.title);
+      if (g) addGuest(g, perf, 'Podcast');
+      addTopic(ep.title, perf);
+    });
+    if (hasAnalytics) {
+      const s = [...eps].sort((a,b) => (b.downloads+b.streams)-(a.downloads+a.streams));
+      if (s[0]?.downloads > 0) extremes.push({ platform: 'Podcast', best: { title: s[0].title, value: s[0].downloads+s[0].streams, metric: 'downloads' }, worst: { title: s[s.length-1].title, value: s[s.length-1].downloads+s[s.length-1].streams, metric: 'downloads' } });
+    }
   }
 
   const guests: GuestStat[] = Object.entries(guestMap).map(([g, s]) => ({ guest: g, avgPerformance: Math.round(s.total/s.count), appearances: s.count, platform: s.platform })).sort((a,b) => b.avgPerformance - a.avgPerformance).slice(0,8);
