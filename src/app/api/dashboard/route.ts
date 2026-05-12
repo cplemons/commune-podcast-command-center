@@ -43,14 +43,14 @@ async function fetchPodcast(megaphoneApiKey?: string) {
           const apiToken = megaphoneApiKey || process.env.MEGAPHONE_API_TOKEN;
           if (apiToken) {
                       try {
-                                    const epsRes = await fetch(`https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=100`, { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' });
+                                    const epsRes = await fetch(`https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=100&include_downloads=true&include_streams=true`, { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' });
                                     if (epsRes.ok) {
                                                     const epsData = await epsRes.json();
                                                     const apiEpisodes = Array.isArray(epsData) ? epsData : epsData?.episodes || [];
                                                     if (apiEpisodes.length > 0) {
                                                                       const episodes = apiEpisodes.map((ep: any) => {
                                                                                           const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
-                                                                                          const downloads = ep.cleanDownloads || ep.downloads || ep.totalDownloads || ep.download_count || ep.preCount || 0;
+                                                                                          const downloads = Number(ep.cleanDownloads || ep.downloads || ep.totalDownloads || ep.download_count || ep.preCount || ep.lifetimeDownloads || ep.lifetime_downloads || 0);
                                                                                          const streams = ep.streams || ep.totalStreams || ep.stream_count || 0;
                                                                                           return { id: ep.id || ep.uid, title: ep.title, publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '', duration: Math.floor(durationSecs / 60), audioUrl: ep.enclosureUrl || ep.audioUrl || '', thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '', downloads, streams, delivered: ep.delivered || ep.totalDelivered || (downloads + streams), performanceScore: downloads + streams };
                                                                       });
