@@ -44,8 +44,9 @@ async function fetchPodcast(megaphoneApiKey?: string) {
   if (!apiToken) return { podcastName: 'Commune with Jeff Krasno', topEpisodes: [], episodes: [], analyticsAvailable: false, apiKeyConfigured: false, totalDownloads: null, totalStreams: null, status: { connected: false, error: 'No API key available' } };
 
   try {
+    // Fetch all episodes (up to 500) so we can rank by performance not recency
     const epsRes = await fetch(
-      `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=100`,
+      `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes?per=500`,
       { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
     );
     if (!epsRes.ok) throw new Error(`Megaphone episodes error: ${epsRes.status}`);
@@ -53,37 +54,83 @@ async function fetchPodcast(megaphoneApiKey?: string) {
     const apiEpisodes = Array.isArray(epsData) ? epsData : epsData?.episodes || [];
     if (apiEpisodes.length === 0) throw new Error('No episodes returned');
 
-    const top20 = apiEpisodes.slice(0, 20);
+    // First check if download counts are available inline on the episodes
+    // (some Megaphone plans expose cleanDownloads / downloads directly on each episode)
+    const firstEp = apiEpisodes[0];
+    const hasInlineDownloads =
+      firstEp?.cleanDownloads != null ||
+      firstEp?.downloads != null ||
+      firstEp?.total_downloads != null;
 
-    const episodes = await Promise.all(top20.map(async (ep: any) => {
-      const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
-      let downloads = 0;
-      let streams = 0;
-      try {
-        const analyticsRes = await fetch(
-          `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes/${ep.id}/analytics`,
-          { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
-        );
-        if (analyticsRes.ok) {
-          const analyticsData = await analyticsRes.json();
-          downloads = Number(analyticsData?.downloads || analyticsData?.total_downloads || analyticsData?.cleanDownloads || 0);
-          streams = Number(analyticsData?.streams || analyticsData?.total_streams || 0);
-        }
-      } catch {}
-      return {
-        id: ep.id || ep.uid,
-        title: ep.title,
-        publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '',
-        duration: Math.floor(durationSecs / 60),
-        audioUrl: ep.enclosureUrl || ep.audioUrl || '',
-        thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '',
-        downloads,
-        streams,
-        delivered: downloads + streams,
-        performanceScore: downloads + streams,
-      };
-    }));
+    let episodes: any[];
 
+    if (hasInlineDownloads) {
+      // Fast path: data already on episode objects
+      episodes = apiEpisodes.map((ep: any) => {
+        const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
+        const downloads = Number(ep.cleanDownloads || ep.downloads || ep.total_downloads || 0);
+        const streams = Number(ep.streams || ep.total_streams || 0);
+        return {
+          id: ep.id || ep.uid,
+          title: ep.title,
+          publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '',
+          duration: Math.floor(durationSecs / 60),
+          audioUrl: ep.enclosureUrl || ep.audioUrl || '',
+          thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '',
+          downloads,
+          streams,
+          delivered: downloads + streams,
+          performanceScore: downloads + streams,
+        };
+      });
+    } else {
+      // Slow path: fetch per-episode analytics (batch concurrently, limit to avoid rate limits)
+      // Fetch analytics for all episodes in batches of 10
+      const BATCH = 10;
+      episodes = [];
+      for (let i = 0; i < apiEpisodes.length; i += BATCH) {
+        const batch = apiEpisodes.slice(i, i + BATCH);
+        const batchResults = await Promise.all(batch.map(async (ep: any) => {
+          const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
+          let downloads = 0;
+          let streams = 0;
+          try {
+            // Try per-episode analytics endpoint
+            const analyticsRes = await fetch(
+              `https://cms.megaphone.fm/api/networks/${NETWORK_ID}/podcasts/${PODCAST_ID}/episodes/${ep.id}/analytics`,
+              { headers: { 'Authorization': `Token token=${apiToken}` }, cache: 'no-store' }
+            );
+            if (analyticsRes.ok) {
+              const ad = await analyticsRes.json();
+              // Handle both object and array responses
+              if (Array.isArray(ad)) {
+                // Array of daily/monthly rollups -- sum them
+                downloads = ad.reduce((s: number, row: any) => s + Number(row?.downloads || row?.cleanDownloads || row?.total_downloads || 0), 0);
+                streams = ad.reduce((s: number, row: any) => s + Number(row?.streams || row?.total_streams || 0), 0);
+              } else {
+                downloads = Number(ad?.downloads || ad?.total_downloads || ad?.cleanDownloads || ad?.clean_downloads || 0);
+                streams = Number(ad?.streams || ad?.total_streams || 0);
+              }
+            }
+          } catch {}
+          return {
+            id: ep.id || ep.uid,
+            title: ep.title,
+            publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '',
+            duration: Math.floor(durationSecs / 60),
+            audioUrl: ep.enclosureUrl || ep.audioUrl || '',
+            thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '',
+            downloads,
+            streams,
+            delivered: downloads + streams,
+            performanceScore: downloads + streams,
+          };
+        }));
+        episodes.push(...batchResults);
+      }
+    }
+
+    // Sort by total downloads+streams descending (performance ranking, not recency)
     const sorted = [...episodes].sort((a: any, b: any) => b.performanceScore - a.performanceScore);
     const totalDownloads = episodes.reduce((s: number, e: any) => s + e.downloads, 0);
     const totalStreams = episodes.reduce((s: number, e: any) => s + e.streams, 0);
@@ -104,7 +151,7 @@ async function fetchPodcast(megaphoneApiKey?: string) {
   }
 }
 
-// Instagram - uses Account Data V2 (POST) which returns posts with engagement metrics
+// Instagram - fetch profile stats + top posts sorted by view count
 async function fetchInstagram() {
           const rapidApiKey = process.env.RAPIDAPI_KEY;
           if (!rapidApiKey) return { status: { connected: false, error: 'RAPIDAPI_KEY not configured' } };
@@ -113,53 +160,129 @@ async function fetchInstagram() {
                       const headers: Record<string, string> = {
                                     'x-rapidapi-host': host,
                                     'x-rapidapi-key': rapidApiKey,
-                                    'Content-Type': 'application/json',
                       };
 
-            // Account Data V2 (POST) returns user + posts with like_count, comment_count, video_view_count
-                      const res = await fetch(`https://${host}/ig_get_fb_profile_hover.php?username_or_url=jeffkrasno`, { headers, cache: 'no-store' });
-                                    if (!res.ok) throw new Error(`Instagram API error: ${res.status}`);
-                      const data = await res.json();
+            // Step 1: fetch profile to get follower count and userId
+            const profileRes = await fetch(
+              `https://${host}/v1/info?username_or_id_or_url=jeffkrasno`,
+              { headers, cache: 'no-store' }
+            );
+            if (!profileRes.ok) throw new Error(`Instagram profile API error: ${profileRes.status}`);
+            const profileData = await profileRes.json();
 
-            // Try Account Data V2 response shape first, then fall back to profile hover shape
-            const userData = data?.user_data || data?.data?.user || data?.data || data;
-                      const followers = Number(userData?.follower_count || userData?.edge_followed_by?.count || 0);
-                      const postsCount = Number(userData?.media_count || userData?.edge_owner_to_timeline_media?.count || 0);
+            // Handle both direct and nested response shapes
+            const userData =
+              profileData?.data ||
+              profileData?.user_data ||
+              profileData?.graphql?.user ||
+              profileData;
 
-            // Posts come from edge_owner_to_timeline_media.edges or user_posts
-            const edgePosts = userData?.edge_owner_to_timeline_media?.edges || [];
-                      const userPosts = data?.user_posts || [];
-                      const rawPosts = edgePosts.length > 0 ? edgePosts : (Array.isArray(userPosts) ? userPosts : []);
+            const followers = Number(
+              userData?.follower_count ||
+              userData?.edge_followed_by?.count ||
+              userData?.followers_count ||
+              0
+            );
+            const postsCount = Number(
+              userData?.media_count ||
+              userData?.edge_owner_to_timeline_media?.count ||
+              userData?.post_count ||
+              0
+            );
+            const userId =
+              userData?.id ||
+              userData?.pk ||
+              userData?.user_id ||
+              '';
 
-            const topPosts = rawPosts.map((p: any) => {
-                          const node = p?.node || p;
-                          const views = Number(node?.video_view_count || node?.view_count || node?.play_count || 0);
-                          const likes = Number(node?.like_count || node?.edge_media_preview_like?.count || node?.edge_liked_by?.count || node?.likes_count || 0);
-                          const comments = Number(node?.comment_count || node?.edge_media_to_comment?.count || node?.comments_count || 0);
-                          const engagementRate = followers > 0 ? ((likes + comments) / followers) * 100 : 0;
-                          const imgCandidates = node?.image_versions2?.candidates || node?.display_resources || [];
-                          const thumbnail = imgCandidates[0]?.url || node?.display_url || node?.thumbnail_url || node?.thumbnail_src || '';
-                          const caption = node?.caption?.text || node?.edge_media_to_caption?.edges?.[0]?.node?.text || node?.accessibility_caption || '';
-                          const takenAt = node?.taken_at || node?.taken_at_timestamp;
-                          const publishedAt = takenAt ? new Date(Number(takenAt) * 1000).toISOString() : '';
-                          const shortcode = node?.shortcode || node?.code || '';
-                          return {
-                                          id: String(node?.id || shortcode),
-                                          caption,
-                                          thumbnail: thumbnail ? `/api/proxy/image?url=${encodeURIComponent(thumbnail)}` : '',
-                                          views, likes, comments, engagementRate, publishedAt,
-                                          url: shortcode ? `https://www.instagram.com/p/${shortcode}/` : '',
-                          };
+            if (!userId) throw new Error('Could not resolve Instagram user ID');
+
+            // Step 2: fetch posts feed using user ID
+            const postsRes = await fetch(
+              `https://${host}/v1/posts?user_id=${userId}`,
+              { headers, cache: 'no-store' }
+            );
+            if (!postsRes.ok) throw new Error(`Instagram posts API error: ${postsRes.status}`);
+            const postsData = await postsRes.json();
+
+            // Posts may be in data.items, data.edges, items, or a top-level array
+            const postsContainer = postsData?.data || postsData;
+            const rawItems: any[] =
+              postsContainer?.items ||
+              postsContainer?.edge_owner_to_timeline_media?.edges ||
+              postsContainer?.posts ||
+              (Array.isArray(postsContainer) ? postsContainer : []);
+
+            const topPosts = rawItems.map((p: any) => {
+              // Unwrap edge node wrapper if present
+              const node = p?.node || p;
+              const views = Number(
+                node?.video_view_count ||
+                node?.view_count ||
+                node?.play_count ||
+                node?.ig_play_count ||
+                0
+              );
+              const likes = Number(
+                node?.like_count ||
+                node?.edge_media_preview_like?.count ||
+                node?.edge_liked_by?.count ||
+                node?.likes_count ||
+                0
+              );
+              const comments = Number(
+                node?.comment_count ||
+                node?.edge_media_to_comment?.count ||
+                node?.comments_count ||
+                0
+              );
+              const engagementRate = followers > 0 ? ((likes + comments) / followers) * 100 : 0;
+              // Thumbnail: try various image fields
+              const imgCandidates = node?.image_versions2?.candidates || node?.display_resources || [];
+              const thumbnail =
+                imgCandidates[0]?.url ||
+                node?.display_url ||
+                node?.thumbnail_url ||
+                node?.thumbnail_src ||
+                node?.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url ||
+                '';
+              const caption =
+                node?.caption?.text ||
+                (typeof node?.caption === 'string' ? node.caption : '') ||
+                node?.edge_media_to_caption?.edges?.[0]?.node?.text ||
+                node?.accessibility_caption ||
+                '';
+              const takenAt = node?.taken_at || node?.taken_at_timestamp || node?.timestamp;
+              const publishedAt = takenAt ? new Date(Number(takenAt) * 1000).toISOString() : '';
+              const shortcode = node?.shortcode || node?.code || node?.pk || '';
+              return {
+                id: String(node?.id || node?.pk || shortcode),
+                caption,
+                thumbnail: thumbnail ? `/api/proxy/image?url=${encodeURIComponent(thumbnail)}` : '',
+                views,
+                likes,
+                comments,
+                engagementRate,
+                publishedAt,
+                url: shortcode ? `https://www.instagram.com/p/${shortcode}/` : '',
+              };
             })
-                      .sort((a: any, b: any) => {
-                                    const aScore = a.views > 0 ? a.views : a.likes;
-                                    const bScore = b.views > 0 ? b.views : b.likes;
-                                    return bScore - aScore;
-                      });
+            // Sort by views descending; fall back to likes if views are all zero
+            .sort((a: any, b: any) => {
+              const aScore = a.views > 0 ? a.views : a.likes;
+              const bScore = b.views > 0 ? b.views : b.likes;
+              return bScore - aScore;
+            });
 
             const totalViews = topPosts.reduce((s: number, p: any) => s + (p.views || 0), 0);
-                      const avgEngagement = topPosts.length > 0 ? topPosts.reduce((s: number, p: any) => s + p.engagementRate, 0) / topPosts.length : 0;
-                      return { profileStats: { followers, postsCount, totalViews, avgEngagement }, topPosts, status: { connected: true } };
+            const avgEngagement = topPosts.length > 0
+              ? topPosts.reduce((s: number, p: any) => s + p.engagementRate, 0) / topPosts.length
+              : 0;
+            return {
+              profileStats: { followers, postsCount, totalViews, avgEngagement },
+              topPosts,
+              status: { connected: true },
+            };
           } catch (err: any) { return { status: { connected: false, error: `Instagram scraper error: ${err.message}` } }; }
 }
 
@@ -219,26 +342,57 @@ async function fetchFacebook() {
     if (!res.ok) return { status: { connected: false, error: `API error: ${res.status}` } };
 
     const json = await res.json();
-    const rawPosts = json?.data?.posts || [];
 
-    if (rawPosts.length === 0) return { status: { connected: false, error: 'No posts returned' } };
+    // Handle multiple possible response shapes from facebook-scraper-api4
+    // Shape A: { data: { posts: [...] } }
+    // Shape B: { data: [...] }  (array directly in data)
+    // Shape C: { results: [...] }
+    // Shape D: top-level array
+    // Shape E: { posts: [...] }
+    let rawPosts: any[] = [];
+    if (Array.isArray(json?.data?.posts)) rawPosts = json.data.posts;
+    else if (Array.isArray(json?.data)) rawPosts = json.data;
+    else if (Array.isArray(json?.results)) rawPosts = json.results;
+    else if (Array.isArray(json?.posts)) rawPosts = json.posts;
+    else if (Array.isArray(json)) rawPosts = json;
 
-    const topPosts = rawPosts.map((p: any) => ({
-      id: p?.details?.post_id || '',
-      url: p?.details?.post_link || '',
-      caption: p?.details?.post_text || p?.message || '',
-      likes: Number(p?.reactions?.total_count || p?.likes || 0),
-      comments: Number(p?.comments?.total_count || p?.comments_count || 0),
-      shares: Number(p?.shares?.count || p?.shares || 0),
-      thumbnail: p?.attachment?.media?.image?.src || p?.full_picture || '',
-      timestamp: p?.details?.creation_time || p?.created_time || '',
-      engagementRate: 0,
-    }))
-.sort((a: any, b: any) => (b.likes + b.comments) - (a.likes + a.comments));
+    if (rawPosts.length === 0) {
+      return { status: { connected: false, error: `No posts in response. Keys: ${Object.keys(json || {}).join(', ')}` } };
+    }
+
+    const topPosts = rawPosts.map((p: any) => {
+      // Normalize across different field naming conventions
+      const id = p?.post_id || p?.details?.post_id || p?.id || '';
+      const url = p?.post_link || p?.details?.post_link || p?.permalink_url || p?.url || '';
+      const caption = p?.post_text || p?.details?.post_text || p?.message || p?.story || p?.text || '';
+      const likes = Number(
+        p?.reactions?.total_count || p?.reactions_count || p?.reaction_count ||
+        p?.likes?.count || p?.likes_count || p?.likes || p?.like_count || 0
+      );
+      const comments = Number(
+        p?.comments?.total_count || p?.comments_count || p?.comment_count ||
+        p?.comments?.count || p?.num_comments || 0
+      );
+      const shares = Number(
+        p?.shares?.count || p?.shares_count || p?.share_count ||
+        p?.shares || p?.num_shares || 0
+      );
+      const thumbnail =
+        p?.attachment?.media?.image?.src ||
+        p?.full_picture || p?.picture || p?.image || p?.thumbnail || '';
+      const timestamp =
+        p?.creation_time || p?.details?.creation_time ||
+        p?.created_time || p?.timestamp || p?.date || '';
+      const engagementRate = 0;
+      return { id, url, caption, likes, comments, shares, thumbnail, timestamp, engagementRate };
+    }).sort((a: any, b: any) => (b.likes + b.comments) - (a.likes + a.comments));
+
+    const totalLikes = topPosts.reduce((s: number, p: any) => s + p.likes, 0);
+    const avgEngagement = topPosts.length > 0 ? totalLikes / topPosts.length : 0;
 
     return {
       status: { connected: true },
-      profileStats: { followers: 0, pageLikes: 0, totalReach: 0, avgEngagement: 0 },
+      profileStats: { followers: 0, pageLikes: 0, totalReach: 0, avgEngagement },
       topPosts,
     };
   } catch (err: any) {
