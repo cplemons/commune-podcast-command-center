@@ -194,7 +194,17 @@ async function fetchFacebook() {
       timestamp: p?.details?.creation_time || p?.created_time || '',
       engagementRate: 0,
     }))
-    .sort((a: any, b: any) => (b.likes + b.comments) - (a.likes + a.comments)
+.sort((a: any, b: any) => (b.likes + b.comments) - (a.likes + a.comments));
+
+    return {
+      status: { connected: true },
+      profileStats: { followers: 0, pageLikes: 0, totalReach: 0, avgEngagement: 0 },
+      topPosts,
+    };
+  } catch (err: any) {
+    return { status: { connected: false, error: `Facebook error: ${err.message}` } };
+  }
+}
 
 export async function GET(request: Request) {
           const { searchParams } = new URL(request.url);
