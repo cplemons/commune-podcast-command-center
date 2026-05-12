@@ -50,8 +50,8 @@ async function fetchPodcast(megaphoneApiKey?: string) {
                                                     if (apiEpisodes.length > 0) {
                                                                       const episodes = apiEpisodes.map((ep: any) => {
                                                                                           const durationSecs = parseFloat(ep.duration || ep.lengthInSeconds || '0');
-                                                                                          const downloads = ep.downloads || ep.totalDownloads || ep.download_count || ep.preCount || 0;
-                                                                                          const streams = ep.streams || ep.totalStreams || ep.stream_count || ep.postCount || 0;
+                                                                                          const downloads = ep.cleanDownloads || ep.downloads || ep.totalDownloads || ep.download_count || ep.preCount || 0;
+                                                                                         const streams = ep.streams || ep.totalStreams || ep.stream_count || 0;
                                                                                           return { id: ep.id || ep.uid, title: ep.title, publishedAt: ep.pubdate || ep.publishedAt || ep.pubDate || '', duration: Math.floor(durationSecs / 60), audioUrl: ep.enclosureUrl || ep.audioUrl || '', thumbnail: ep.imageUrl || ep.image || ep.thumbnailUrl || '', downloads, streams, delivered: ep.delivered || ep.totalDelivered || (downloads + streams), performanceScore: downloads + streams };
                                                                       });
                                                                       const hasAnalytics = episodes.some((e: any) => e.downloads > 0 || e.streams > 0);
