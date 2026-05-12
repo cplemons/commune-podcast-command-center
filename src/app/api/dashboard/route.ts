@@ -166,7 +166,7 @@ async function fetchFacebook() {
           const host = 'facebook-scraper-api4.p.rapidapi.com';
           const headers = { 'x-rapidapi-host': host, 'x-rapidapi-key': rapidApiKey, 'Content-Type': 'application/json' };
         const attempts = [
-          `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?facebook_id=100032044192242&count=20`,,
+          `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?facebook_id=100032044192242&count=20`,
         ];
           let rawPosts: any[] = [];
           let pageInfo: any = {};
@@ -178,7 +178,7 @@ async function fetchFacebook() {
                                     if (!res.ok) { debugLog.push(`${statusCode}:${url.split('?')[0].split('/').pop()}`); continue; }
                                     const json = await res.json();
                                     const topLevelKeys = Object.keys(json).join(',');
-                                    const posts = json?.data || json?.posts || json?.results || json?.items || [];
+                                    const posts = json?.data?.posts || json?.posts || json?.data || json?.results || json?.items || [];
                                     pageInfo = json?.page || json?.page_info || json?.meta || {};
                                     debugLog.push(`200:keys=${topLevelKeys}:posts=${Array.isArray(posts) ? posts.length : 'N'}`);
                                     if (Array.isArray(posts) && posts.length > 0) { rawPosts = posts; break; }
