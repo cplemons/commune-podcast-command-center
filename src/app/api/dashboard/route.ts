@@ -163,14 +163,11 @@ async function fetchTikTok() {
 async function fetchFacebook() {
           const rapidApiKey = process.env.RAPIDAPI_KEY;
           if (!rapidApiKey) return { status: { connected: false, error: 'RAPIDAPI_KEY not configured' } };
-          const host = 'facebook-scraper3.p.rapidapi.com';
+          const host = 'facebook-scraper-api4.p.rapidapi.com';
           const headers = { 'x-rapidapi-host': host, 'x-rapidapi-key': rapidApiKey, 'Content-Type': 'application/json' };
-          const attempts = [
-                      `https://${host}/page/posts?page_id=https%3A%2F%2Fwww.facebook.com%2Fjeffpatrickkrasno&count=20`,
-                      `https://${host}/page/posts?page_id=jeffpatrickkrasno&count=20`,
-                      `https://${host}/posts_by_page?page_id=jeffpatrickkrasno&count=20`,
-                      `https://${host}/posts_by_page?page_id=https%3A%2F%2Fwww.facebook.com%2Fjeffpatrickkrasno&count=20`,
-                    ];
+        const attempts = [
+          `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?facebook_id=jeffpatrickkrasno&count=20`,
+        ];
           let rawPosts: any[] = [];
           let pageInfo: any = {};
           const debugLog: string[] = [];
