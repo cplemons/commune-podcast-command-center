@@ -166,7 +166,7 @@ async function fetchFacebook() {
           const host = 'facebook-scraper-api4.p.rapidapi.com';
           const headers = { 'x-rapidapi-host': host, 'x-rapidapi-key': rapidApiKey, 'Content-Type': 'application/json' };
         const attempts = [
-          `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?facebook_id=jeffpatrickkrasno&count=20`,
+          `https://facebook-scraper-api4.p.rapidapi.com/get_facebook_pages_posts?facebook_id=100032044192242&count=20`,,
         ];
           let rawPosts: any[] = [];
           let pageInfo: any = {};
