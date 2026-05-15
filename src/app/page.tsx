@@ -18,42 +18,21 @@ interface DashData {
 }
 
 interface MetricoolRow {
-  image: string;
-  url: string;
-  text: string;
-  network: string;
-  date: string;
-  impressions: number;
-  interactions: number;
-  engagement: number;
+  image: string; url: string; text: string; network: string; date: string;
+  impressions: number; interactions: number; engagement: number;
 }
-
-interface PlatformSummary {
-  network: string;
-  totalPosts: number;
-  totalImpressions: number;
-  avgEngagement: number;
-}
-
-interface MonthlyDataPoint {
-  month: string;
-  [network: string]: number | string;
-}
-
-interface TopicImpression {
-  topic: string;
-  totalImpressions: number;
-  postCount: number;
-}
+interface PlatformSummary { network: string; totalPosts: number; totalImpressions: number; avgEngagement: number; }
+interface MonthlyDataPoint { month: string; [network: string]: number | string; }
+interface TopicImpression { topic: string; totalImpressions: number; postCount: number; }
 
 function fmt(n: number | null | undefined): string {
-  if (n == null || isNaN(n as number)) return '\u2014';
+  if (n == null || isNaN(n as number)) return '—';
   if ((n as number) >= 1000000) return ((n as number) / 1000000).toFixed(1) + 'M';
   if ((n as number) >= 1000) return ((n as number) / 1000).toFixed(1) + 'K';
   return String(Math.round(n as number));
 }
 function fmtPct(n: number | null | undefined): string {
-  if (n == null || isNaN(n as number)) return '\u2014';
+  if (n == null || isNaN(n as number)) return '—';
   return (n as number).toFixed(2) + '%';
 }
 function timeAgo(dateStr: string): string {
@@ -112,10 +91,12 @@ function classifyTopic(text: string): string | null {
   return null;
 }
 
-function analyzeContent(data: DashData) {
+// Change 5: analyzeContent now accepts optional metricoolRows to incorporate CSV data
+function analyzeContent(data: DashData, metricoolRows: MetricoolRow[] = []) {
   const guestMap: Record<string, { total: number; count: number; platform: string }> = {};
   const topicMap: Record<string, { total: number; count: number }> = {};
   const extremes: PerfExtreme[] = [];
+
   function addGuest(name: string, val: number, plat: string) {
     if (!guestMap[name]) guestMap[name] = { total: 0, count: 0, platform: plat };
     guestMap[name].total += val; guestMap[name].count++;
@@ -126,6 +107,7 @@ function analyzeContent(data: DashData) {
     if (!topicMap[t]) topicMap[t] = { total: 0, count: 0 };
     topicMap[t].total += val; topicMap[t].count++;
   }
+
   const ytVideos = data.youtube?.topVideos || data.youtube?.videos || [];
   if (ytVideos.length > 0) {
     ytVideos.forEach(v => { const g = extractGuest(v.title); if (g) addGuest(g, v.views, 'YouTube'); addTopic(v.title, v.views); });
@@ -152,18 +134,21 @@ function analyzeContent(data: DashData) {
   }
   const eps = data.podcast?.topEpisodes || data.podcast?.episodes || [];
   if (eps.length > 0) {
-    const hasAnalytics = data.podcast?.analyticsAvailable === true;
     eps.forEach(ep => {
-      const perf = hasAnalytics ? (ep.downloads + ep.streams) : 1;
+      const perf = (ep.downloads || 0) + (ep.streams || 0) || 1;
       const g = extractGuest(ep.title);
       if (g) addGuest(g, perf, 'Podcast');
       addTopic(ep.title, perf);
     });
-    if (hasAnalytics) {
-      const s = [...eps].sort((a,b) => (b.downloads+b.streams)-(a.downloads+a.streams));
-      if (s[0]?.downloads > 0) extremes.push({ platform: 'Podcast', best: { title: s[0].title, value: s[0].downloads+s[0].streams, metric: 'downloads' }, worst: { title: s[s.length-1].title, value: s[s.length-1].downloads+s[s.length-1].streams, metric: 'downloads' } });
-    }
   }
+
+  // Incorporate Metricool CSV rows (all 7 networks)
+  for (const row of metricoolRows) {
+    const g = extractGuest(row.text);
+    if (g) addGuest(g, row.impressions, row.network);
+    addTopic(row.text, row.impressions);
+  }
+
   const guests: GuestStat[] = Object.entries(guestMap).map(([g, s]) => ({ guest: g, avgPerformance: Math.round(s.total/s.count), appearances: s.count, platform: s.platform })).sort((a,b) => b.avgPerformance - a.avgPerformance).slice(0,8);
   const topics: TopicStat[] = Object.entries(topicMap).map(([t, s]) => ({ topic: t, avgPerformance: Math.round(s.total/s.count), count: s.count })).sort((a,b) => b.avgPerformance - a.avgPerformance).slice(0,6);
   return { guests, topics, extremes };
@@ -250,7 +235,7 @@ function buildTopTopics(rows: MetricoolRow[]): TopicImpression[] {
   const STOP = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','our','one','had','his','him','has','how','its','now','did','get','may','new','see','two','who','day','way','use','from','that','this','with','have','your','they','been','more','will','what','when','like','just','into','than','then','also','some','time','each','very','much','both','same','over','such','here','only','most','other','their','about','would','there','could','after','think','first','these','those','being','great','many','even','want','give','back','come','does','good','well','know','long','make','said','take','them','went','were','which','while','work','years','help','need','put','out','she','yet','in','is','it','of','to','a','an','or','as','at','by','if','up','do','so','we','be','me','my','no','us','am']);
   const wordMap: Record<string, { impressions: number; count: number }> = {};
   for (const r of rows) {
-    const words = r.text.toLowerCase().replace(/https?:\/\/\S+/g, '').replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3 && !STOP.has(w));
+    const words = r.text.toLowerCase().replace(/https?:\/\/\S+/g,'').replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w => w.length > 3 && !STOP.has(w));
     const seen = new Set<string>();
     for (const w of words) {
       if (seen.has(w)) continue;
@@ -260,7 +245,7 @@ function buildTopTopics(rows: MetricoolRow[]): TopicImpression[] {
       wordMap[w].count++;
     }
   }
-  return Object.entries(wordMap).map(([topic, s]) => ({ topic, totalImpressions: s.impressions, postCount: s.count })).filter(t => t.postCount >= 2).sort((a, b) => b.totalImpressions - a.totalImpressions).slice(0, 10);
+  return Object.entries(wordMap).map(([topic, s]) => ({ topic, totalImpressions: s.impressions, postCount: s.count })).filter(t => t.postCount >= 2).sort((a,b) => b.totalImpressions - a.totalImpressions).slice(0,10);
 }
 
 const NET_COLORS: Record<string, string> = { instagram: '#E1306C', facebook: '#1877F2', youtube: '#FF0000', tiktok: '#69C9D0', linkedin: '#0A66C2', twitter: '#1DA1F2', threads: '#9B9B9B' };
@@ -287,12 +272,13 @@ function NotConnected({ platform, error }: { platform: string; error?: string })
   );
 }
 
+// Change 4: PostCard wrapped in anchor link
 function PostCard({ post, metric }: { post: PostItem; metric: string }) {
   const [imgErr, setImgErr] = useState(false);
   const perf = metric === 'views' ? post.views : metric === 'likes' ? post.likes : (post.engagement || post.likes + post.comments);
   const thumb = proxyImg(post.thumbnail);
-  return (
-    <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
+  const card = (
+    <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden hover:border-[#4a3a2a] transition-colors">
       <div className="h-36 bg-[#0f0d0a] relative">
         {thumb && !imgErr ? <img src={thumb} alt="" className="w-full h-full object-cover" onError={() => setImgErr(true)} /> : <div className="w-full h-full flex items-center justify-center text-[#3a2a1a] text-4xl">📸</div>}
       </div>
@@ -309,8 +295,11 @@ function PostCard({ post, metric }: { post: PostItem; metric: string }) {
       </div>
     </div>
   );
+  if (post.url) return <a href={post.url} target="_blank" rel="noopener noreferrer" className="block">{card}</a>;
+  return card;
 }
 
+// Change 4: VideoCard wrapped in YouTube link
 function VideoCard({ video }: { video: VideoItem }) {
   function parseDur(iso: string) {
     const m = iso?.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
@@ -318,47 +307,58 @@ function VideoCard({ video }: { video: VideoItem }) {
     const h=parseInt(m[1]||'0'),mn=parseInt(m[2]||'0'),s=parseInt(m[3]||'0');
     return h>0 ? h+':'+String(mn).padStart(2,'0')+':'+String(s).padStart(2,'0') : mn+':'+String(s).padStart(2,'0');
   }
+  const href = 'https://youtube.com/watch?v=' + video.id;
   return (
-    <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
-      <div className="h-36 bg-[#0f0d0a] relative">
-        {video.thumbnail ? <img src={video.thumbnail} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-4xl text-[#3a2a1a]">&#9654;</div>}
-        {video.duration && <span className="absolute bottom-1 right-1 bg-black/80 text-white text-xs px-1 rounded">{parseDur(video.duration)}</span>}
-      </div>
-      <div className="p-3">
-        <p className="text-xs text-[#ccc] line-clamp-2 mb-2">{video.title}</p>
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-amber-400 font-semibold">{fmt(video.views)} views</span>
-          <span className="text-[#8a7060]">{fmtPct(video.engagementRate)} eng</span>
+    <a href={href} target="_blank" rel="noopener noreferrer" className="block">
+      <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden hover:border-[#4a3a2a] transition-colors">
+        <div className="h-36 bg-[#0f0d0a] relative">
+          {video.thumbnail ? <img src={video.thumbnail} alt="" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-4xl text-[#3a2a1a]">&#9654;</div>}
+          {video.duration && <span className="absolute bottom-1 right-1 bg-black/80 text-white text-xs px-1 rounded">{parseDur(video.duration)}</span>}
         </div>
-        <div className="flex gap-3 mt-1 text-xs text-[#6a5a4a]">
-          <span>&#128077; {fmt(video.likes)}</span>
-          <span>&#128172; {fmt(video.comments)}</span>
+        <div className="p-3">
+          <p className="text-xs text-[#ccc] line-clamp-2 mb-2">{video.title}</p>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-amber-400 font-semibold">{fmt(video.views)} views</span>
+            <span className="text-[#8a7060]">{fmtPct(video.engagementRate)} eng</span>
+          </div>
+          <div className="flex gap-3 mt-1 text-xs text-[#6a5a4a]">
+            <span>&#128077; {fmt(video.likes)}</span>
+            <span>&#128172; {fmt(video.comments)}</span>
+          </div>
         </div>
       </div>
-    </div>
+    </a>
   );
 }
 
-function EpisodeCard({ ep, analytics }: { ep: EpisodeItem; analytics: boolean }) {
+// Change 4: EpisodeCard wrapped in audioUrl link; Change 2: no analytics gating
+function EpisodeCard({ ep }: { ep: EpisodeItem }) {
   const [imgErr, setImgErr] = useState(false);
   const thumb = proxyImg(ep.thumbnail);
-  return (
-    <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
+  const href = ep.audioUrl || '';
+  const pubDate = ep.publishedAt ? new Date(ep.publishedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const card = (
+    <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden hover:border-[#4a3a2a] transition-colors">
       <div className="h-32 bg-[#0f0d0a]">
         {thumb && !imgErr ? <img src={thumb} alt="" className="w-full h-full object-cover" onError={() => setImgErr(true)} /> : <div className="w-full h-full flex items-center justify-center text-5xl text-[#3a2a1a]">&#127897;</div>}
       </div>
       <div className="p-3">
         <p className="text-xs text-[#ccc] line-clamp-2 mb-2">{ep.title}</p>
-        <div className="text-xs text-[#8a7060]">&#9201; {ep.duration}m</div>
-        {analytics ? (
+        <div className="flex gap-3 text-xs text-[#8a7060]">
+          {ep.duration > 0 && <span>&#9201; {ep.duration}m</span>}
+          {pubDate && <span>{pubDate}</span>}
+        </div>
+        {((ep.downloads || 0) + (ep.streams || 0)) > 0 && (
           <div className="grid grid-cols-2 gap-1 mt-2 text-xs">
             <div className="text-amber-400">&#8595; {fmt(ep.downloads)}</div>
             <div className="text-blue-400">&#9654; {fmt(ep.streams)}</div>
           </div>
-        ) : <div className="text-xs text-[#4a3a2a] mt-1 italic">analytics locked</div>}
+        )}
       </div>
     </div>
   );
+  if (href) return <a href={href} target="_blank" rel="noopener noreferrer" className="block">{card}</a>;
+  return card;
 }
 
 function Section({ icon, title, children }: { icon: string; title: string; children: React.ReactNode }) {
@@ -370,7 +370,7 @@ function Section({ icon, title, children }: { icon: string; title: string; child
           <span className="text-xl">{icon}</span>
           <span className="text-white font-semibold text-lg">{title}</span>
         </div>
-        <span className="text-[#6a5a4a]">{open ? '\u2227' : '\u2228'}</span>
+        <span className="text-[#6a5a4a]">{open ? '∧' : '∨'}</span>
       </button>
       {open && <div className="px-6 pb-6">{children}</div>}
     </div>
@@ -379,7 +379,8 @@ function Section({ icon, title, children }: { icon: string; title: string; child
 
 interface MetricoolState { rows: MetricoolRow[]; uploadedAt: Date; fileName: string; }
 
-function SocialAnalyticsSection() {
+// Change 6 + Change 5: exposes rows upward; top 30 video-only with URL column
+function SocialAnalyticsSection({ onRowsChange }: { onRowsChange: (rows: MetricoolRow[]) => void }) {
   const [metricool, setMetricool]         = useState<MetricoolState | null>(null);
   const [parsing, setParsing]             = useState(false);
   const [parseError, setParseError]       = useState<string | null>(null);
@@ -400,6 +401,7 @@ function SocialAnalyticsSection() {
         } else {
           setMetricool({ rows, uploadedAt: new Date(), fileName: file.name });
           setNetworkFilter('all');
+          onRowsChange(rows);
         }
       } catch (err) { setParseError('Failed to parse CSV: ' + String(err)); }
       finally { setParsing(false); }
@@ -409,12 +411,20 @@ function SocialAnalyticsSection() {
     e.target.value = '';
   }
 
-  function handleClear() { setMetricool(null); setParseError(null); setNetworkFilter('all'); }
+  function handleClear() {
+    setMetricool(null); setParseError(null); setNetworkFilter('all');
+    onRowsChange([]);
+  }
 
   const allNetworks: string[] = metricool ? Array.from(new Set(metricool.rows.map(r => r.network))).sort() : [];
   const filteredRows: MetricoolRow[] = metricool ? (networkFilter === 'all' ? metricool.rows : metricool.rows.filter(r => r.network === networkFilter)) : [];
   const platformSummary: PlatformSummary[] = metricool ? buildPlatformSummary(metricool.rows) : [];
-  const top10: MetricoolRow[] = [...filteredRows].sort((a, b) => b.impressions - a.impressions).slice(0, 10);
+
+  // Change 6: top 30 video-only (youtube, tiktok, instagram), with URL column
+  const VIDEO_NETWORKS = ['youtube', 'tiktok', 'instagram'];
+  const videoRows: MetricoolRow[] = filteredRows.filter(r => VIDEO_NETWORKS.includes(r.network));
+  const top30: MetricoolRow[] = [...videoRows].sort((a,b) => b.impressions - a.impressions).slice(0, 30);
+
   const monthlyData: MonthlyDataPoint[] = metricool ? buildMonthlyTrend(metricool.rows, allNetworks) : [];
   const topTopics: TopicImpression[] = metricool ? buildTopTopics(filteredRows) : [];
   const maxTopicImpressions: number = topTopics[0]?.totalImpressions || 1;
@@ -430,7 +440,7 @@ function SocialAnalyticsSection() {
         {parseError && <div className="bg-red-900/30 border border-red-800 text-red-300 text-sm rounded-xl px-5 py-3 mb-4 max-w-lg text-center">{parseError}</div>}
         <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFileChange} />
         <button onClick={() => fileInputRef.current?.click()} disabled={parsing} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold px-6 py-3 rounded-xl flex items-center gap-2 transition-colors">
-          {parsing ? <><span className="inline-block animate-spin">\u27f3</span> Parsing CSV\u2026</> : <><span>📂</span> Choose CSV File</>}
+          {parsing ? <><span className="inline-block animate-spin">⟳</span> Parsing CSV…</> : <><span>📂</span> Choose CSV File</>}
         </button>
       </div>
     );
@@ -441,11 +451,11 @@ function SocialAnalyticsSection() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-[#8a7060]">
           <span className="text-white font-medium">{metricool.fileName}</span>
-          {' \u00b7 '}{metricool.rows.length.toLocaleString()} posts parsed
-          {' \u00b7 '}Last updated {metricool.uploadedAt.toLocaleTimeString()}
+          {' · '}{metricool.rows.length.toLocaleString()} posts parsed
+          {' · '}Last updated {metricool.uploadedAt.toLocaleTimeString()}
         </div>
         <button onClick={handleClear} className="bg-[#1a1612] border border-[#2a2118] hover:bg-[#2a2118] text-sm text-[#8a7060] hover:text-white rounded-lg px-3 py-1.5 transition-colors">
-          \u2715 Clear / Re-upload
+          ✕ Clear / Re-upload
         </button>
       </div>
 
@@ -480,8 +490,8 @@ function SocialAnalyticsSection() {
 
       <div>
         <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">
-          Top 10 Posts by Impressions
-          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">\u2014 {netLabel(networkFilter)}</span>}
+          Top 30 Video Posts by Impressions (YouTube · TikTok · Instagram)
+          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">— {netLabel(networkFilter)}</span>}
         </div>
         <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
           <table className="w-full text-sm">
@@ -494,10 +504,11 @@ function SocialAnalyticsSection() {
                 <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Impressions</th>
                 <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Interactions</th>
                 <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Engagement</th>
+                <th className="text-center text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Link</th>
               </tr>
             </thead>
             <tbody>
-              {top10.map((row, i) => (
+              {top30.map((row, i) => (
                 <tr key={i} className="border-b border-[#2a2118] last:border-0 hover:bg-[#1e1a16] transition-colors">
                   <td className="px-4 py-3 text-[#6a5a4a] font-medium">{i + 1}</td>
                   <td className="px-4 py-3">
@@ -508,15 +519,20 @@ function SocialAnalyticsSection() {
                   </td>
                   <td className="px-4 py-3 text-xs text-[#8a7060] whitespace-nowrap">{row.date.slice(0, 10)}</td>
                   <td className="px-4 py-3 text-xs text-[#ccc] max-w-xs">
-                    <div className="truncate" title={row.text}>{row.text.slice(0, 120)}{row.text.length > 120 ? '\u2026' : ''}</div>
+                    <div className="truncate" title={row.text}>{row.text.slice(0, 100)}{row.text.length > 100 ? '…' : ''}</div>
                   </td>
                   <td className="px-4 py-3 text-right text-amber-400 font-semibold">{fmt(row.impressions)}</td>
                   <td className="px-4 py-3 text-right text-xs text-[#ccc]">{fmt(row.interactions)}</td>
                   <td className="px-4 py-3 text-right text-xs text-green-400">{fmtPct(row.engagement)}</td>
+                  <td className="px-4 py-3 text-center">
+                    {row.url ? (
+                      <a href={row.url} target="_blank" rel="noopener noreferrer" className="text-xs text-amber-400 hover:text-amber-300 underline underline-offset-2">↗</a>
+                    ) : <span className="text-xs text-[#4a3a2a]">—</span>}
+                  </td>
                 </tr>
               ))}
-              {top10.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-xs text-[#6a5a4a]">No posts found for this filter.</td></tr>
+              {top30.length === 0 && (
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-xs text-[#6a5a4a]">No video posts found for this filter.</td></tr>
               )}
             </tbody>
           </table>
@@ -548,10 +564,10 @@ function SocialAnalyticsSection() {
       <div>
         <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">
           Top Topics by Total Impressions
-          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">\u2014 {netLabel(networkFilter)}</span>}
+          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">— {netLabel(networkFilter)}</span>}
         </div>
         {topTopics.length === 0 ? (
-          <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-6 text-center text-xs text-[#6a5a4a]">Not enough keyword data \u2014 try uploading more posts or selecting a different network.</div>
+          <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-6 text-center text-xs text-[#6a5a4a]">Not enough keyword data — try uploading more posts or selecting a different network.</div>
         ) : (
           <div className="space-y-2">
             {topTopics.map((t, i) => (
@@ -581,20 +597,17 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(30);
-  const [megaphoneKey, setMegaphoneKey] = useState('');
-  const [mkInput, setMkInput] = useState('');
+  const [metricoolRows, setMetricoolRows] = useState<MetricoolRow[]>([]);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadData = useCallback(async (key?: string) => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const k = key !== undefined ? key : megaphoneKey;
-      const url = k ? '/api/dashboard?megaphoneKey=' + encodeURIComponent(k) : '/api/dashboard';
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch('/api/dashboard', { cache: 'no-store' });
       setData(await res.json());
       setLastUpdated(new Date());
     } catch(e) { console.error(e); } finally { setLoading(false); }
-  }, [megaphoneKey]);
+  }, []);
 
   useEffect(() => { loadData(); }, []);
   useEffect(() => {
@@ -603,17 +616,18 @@ export default function Home() {
     return () => { if (timer.current) clearInterval(timer.current); };
   }, [autoRefresh, loadData]);
 
-  const yt = data?.youtube;
-  const pod = data?.podcast;
-  const ig = data?.instagram;
-  const tt = data?.tiktok;
-  const fb = data?.facebook;
-  const ytVideos  = yt?.topVideos  || yt?.videos   || [];
-  const episodes  = pod?.topEpisodes || pod?.episodes || [];
-  const igPosts   = ig?.topPosts   || [];
-  const ttPosts   = tt?.topPosts   || [];
-  const fbPosts   = fb?.topPosts   || [];
-  const analysis  = data ? analyzeContent(data) : null;
+  const yt     = data?.youtube;
+  const pod    = data?.podcast;
+  const ig     = data?.instagram;
+  const tt     = data?.tiktok;
+  const fb     = data?.facebook;
+  const ytVideos = yt?.topVideos  || yt?.videos   || [];
+  const episodes = pod?.topEpisodes || pod?.episodes || [];
+  const igPosts  = ig?.topPosts   || [];
+  const ttPosts  = tt?.topPosts   || [];
+  const fbPosts  = fb?.topPosts   || [];
+  // Change 5: pass metricoolRows so CSV data enriches guest/topic analysis
+  const analysis = data ? analyzeContent(data, metricoolRows) : null;
 
   return (
     <div className="min-h-screen bg-[#0c0a08] text-white">
@@ -621,7 +635,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold">Commune Podcast</h1>
-            <p className="text-xs text-[#6a5a4a]">Command Center \u00b7 {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</p>
+            <p className="text-xs text-[#6a5a4a]">Command Center · {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</p>
           </div>
           <div className="flex items-center gap-3">
             <select value={autoRefresh} onChange={e=>setAutoRefresh(Number(e.target.value))} className="bg-[#1a1612] border border-[#2a2118] text-sm text-white rounded-lg px-3 py-2 focus:outline-none">
@@ -641,13 +655,13 @@ export default function Home() {
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
         <div className="grid grid-cols-5 gap-4 bg-[#12100e] border border-[#2a2118] rounded-2xl p-4">
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">YouTube Subscribers</div><div className="text-2xl font-bold">{fmt(yt?.channelStats?.subscribers)}</div><div className="text-xs text-[#6a5a4a]">{fmt(yt?.channelStats?.totalViews)} total views</div></div>
-          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Podcast Episodes</div><div className="text-2xl font-bold">{episodes.length||'\u2014'}</div><div className="text-xs text-[#6a5a4a]">{pod?.podcastName||'Commune with Jeff Krasno'}</div></div>
+          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Podcast Episodes</div><div className="text-2xl font-bold">{episodes.length||'—'}</div><div className="text-xs text-[#6a5a4a]">{pod?.podcastName||'Commune with Jeff Krasno'}</div></div>
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Instagram</div><div className="text-2xl font-bold">{fmt(ig?.profileStats?.followers)}</div><div className="text-xs text-[#6a5a4a]">followers</div></div>
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">TikTok</div><div className="text-2xl font-bold">{fmt(tt?.profileStats?.followers)}</div><div className="text-xs text-[#6a5a4a]">followers</div></div>
-          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Facebook</div><div className="text-2xl font-bold">{fbPosts.length>0?fbPosts.length+' posts':'\u2014'}</div><div className="text-xs text-[#6a5a4a]">@jeffpatrickkrasno</div></div>
+          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Facebook</div><div className="text-2xl font-bold">{fbPosts.length>0?fbPosts.length+' posts':'—'}</div><div className="text-xs text-[#6a5a4a]">@jeffpatrickkrasno</div></div>
         </div>
 
-        <Section icon="&#9654;" title="YouTube \u2014 @jeffkrasno">
+        <Section icon="&#9654;" title="YouTube — @jeffkrasno">
           {yt?.status?.connected===false ? <NotConnected platform="YouTube" error={yt.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
@@ -662,38 +676,21 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#127897;" title="Commune Podcast \u2014 Megaphone">
+        <Section icon="&#127897;" title="Commune Podcast — Megaphone">
           {pod?.status?.connected===false ? <NotConnected platform="Podcast" error={pod.status.error} /> : (
             <>
-              <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label="Total Episodes"  value={String(episodes.length||'\u2014')} />
-                <StatCard label="Total Downloads" value={pod?.totalDownloads!=null?fmt(pod.totalDownloads):'\u2014'} sub={pod?.totalDownloads==null?'analytics unavailable':undefined} />
-                <StatCard label="Total Streams"   value={pod?.totalStreams!=null?fmt(pod.totalStreams):'\u2014'} sub={pod?.totalStreams==null?'analytics unavailable':undefined} />
-                <StatCard label="Avg Listen Time" value="\u2014" sub="analytics unavailable" />
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <StatCard label="Total Episodes"  value={String(episodes.length||'—')} />
+                <StatCard label="Total Downloads" value={pod?.totalDownloads!=null?fmt(pod.totalDownloads):'—'} />
+                <StatCard label="Total Streams"   value={pod?.totalStreams!=null?fmt(pod.totalStreams):'—'} />
               </div>
-              {!pod?.analyticsAvailable && (
-                <div className="bg-[#1a1410] border border-[#3a2a10] rounded-xl p-4 mb-6">
-                  <div className="flex items-start gap-3">
-                    <span className="text-2xl">&#128273;</span>
-                    <div className="flex-1">
-                      <div className="font-semibold text-amber-400 mb-1">Enter your Megaphone API key to unlock analytics</div>
-                      <div className="text-xs text-[#8a7060] mb-3">Episode download counts, stream counts, and consumption time require Megaphone API access. Find your key at <strong className="text-white">cms.megaphone.fm \u2192 Settings \u2192 API</strong>.</div>
-                      <div className="flex gap-2">
-                        <input type="password" value={mkInput} onChange={e=>setMkInput(e.target.value)} placeholder="Enter Megaphone API key..." className="flex-1 bg-[#0c0a08] border border-[#3a2a10] text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-amber-500" onKeyDown={e=>{if(e.key==='Enter'){setMegaphoneKey(mkInput);loadData(mkInput);}}} />
-                        <button onClick={()=>{setMegaphoneKey(mkInput);loadData(mkInput);}} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold px-4 py-2 rounded-lg">Connect</button>
-                      </div>
-                      <div className="text-xs text-[#6a5a4a] mt-2">Note: Your account may also need the <strong className="text-white">Analytics add-on</strong> enabled at cms.megaphone.fm for episode-level stats.</div>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">{pod?.analyticsAvailable?'Top Episodes by Downloads':'Recent Episodes \u2014 connect API above for performance ranking'}</div>
-              <div className="grid grid-cols-4 gap-4">{episodes.slice(0,8).map(ep=><EpisodeCard key={ep.id} ep={ep} analytics={!!pod?.analyticsAvailable}/>)}</div>
+              <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Recent Episodes</div>
+              <div className="grid grid-cols-4 gap-4">{episodes.slice(0,8).map(ep=><EpisodeCard key={ep.id} ep={ep}/>)}</div>
             </>
           )}
         </Section>
 
-        <Section icon="&#128247;" title="Instagram \u2014 @jeffkrasno">
+        <Section icon="&#128247;" title="Instagram — @jeffkrasno">
           {ig?.status?.connected===false ? <NotConnected platform="Instagram" error={ig.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
@@ -708,14 +705,13 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#127925;" title="TikTok \u2014 @jeffkrasno">
+        <Section icon="&#127925;" title="TikTok — @jeffkrasno">
           {tt?.status?.connected===false ? <NotConnected platform="TikTok" error={tt.status.error} /> : (
             <>
-              <div className="grid grid-cols-4 gap-4 mb-6">
+              <div className="grid grid-cols-3 gap-4 mb-6">
                 <StatCard label="Followers"      value={fmt(tt?.profileStats?.followers)} />
                 <StatCard label="Total Views"    value={fmt(tt?.profileStats?.totalViews)} />
                 <StatCard label="Avg Engagement" value={fmtPct(tt?.profileStats?.avgEngagement)} />
-                <StatCard label="Avg CTR"        value={fmtPct(tt?.profileStats?.avgCtr)} />
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Posts by Views</div>
               <div className="grid grid-cols-4 gap-4">{ttPosts.slice(0,8).map(p=><PostCard key={p.id} post={p} metric="views"/>)}</div>
@@ -723,7 +719,7 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#128100;" title="Facebook \u2014 @jeffpatrickkrasno">
+        <Section icon="&#128100;" title="Facebook — @jeffpatrickkrasno">
           {fb?.status?.connected===false ? (
             <div className="space-y-4">
               <NotConnected platform="Facebook" error={fb?.status?.error} />
@@ -740,14 +736,14 @@ export default function Home() {
           ) : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-4">
-                <StatCard label="Page Likes"     value={fb?.profileStats?.pageLikes?fmt(fb.profileStats.pageLikes):'\u2014'} sub={!fb?.profileStats?.pageLikes?'needs Graph API token':undefined} />
-                <StatCard label="Followers"      value={fb?.profileStats?.followers?fmt(fb.profileStats.followers):'\u2014'} sub={!fb?.profileStats?.followers?'needs Graph API token':undefined} />
+                <StatCard label="Page Likes"     value={fb?.profileStats?.pageLikes?fmt(fb.profileStats.pageLikes):'—'} sub={!fb?.profileStats?.pageLikes?'needs Graph API token':undefined} />
+                <StatCard label="Followers"      value={fb?.profileStats?.followers?fmt(fb.profileStats.followers):'—'} sub={!fb?.profileStats?.followers?'needs Graph API token':undefined} />
                 <StatCard label="Total Reach"    value={fmt(fb?.profileStats?.totalReach)} />
-                <StatCard label="Avg Engagement" value={fb?.profileStats?.avgEngagement?fmt(fb.profileStats.avgEngagement):'\u2014'} sub="per post" />
+                <StatCard label="Avg Engagement" value={fb?.profileStats?.avgEngagement?fmt(fb.profileStats.avgEngagement):'—'} sub="per post" />
               </div>
               <div className="bg-[#1a1410] border border-[#2a1f10] rounded-xl p-3 mb-4 flex items-start gap-2">
                 <span className="text-amber-500 text-sm mt-0.5">&#8505;</span>
-                <div className="text-xs text-[#8a7060]"><strong className="text-amber-400">Follower &amp; Page Like counts require a Facebook Graph API token.</strong> To enable: Facebook Developer App \u2192 request <code className="bg-[#0c0a08] px-1 rounded">pages_read_engagement</code> \u2192 generate Page Access Token \u2192 add as <code className="bg-[#0c0a08] px-1 rounded">FACEBOOK_ACCESS_TOKEN</code> in Vercel env vars.</div>
+                <div className="text-xs text-[#8a7060]"><strong className="text-amber-400">Follower &amp; Page Like counts require a Facebook Graph API token.</strong> To enable: Facebook Developer App → request <code className="bg-[#0c0a08] px-1 rounded">pages_read_engagement</code> → generate Page Access Token → add as <code className="bg-[#0c0a08] px-1 rounded">FACEBOOK_ACCESS_TOKEN</code> in Vercel env vars.</div>
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Posts by Engagement</div>
               <div className="grid grid-cols-4 gap-4">{fbPosts.slice(0,8).map(p=><PostCard key={p.id} post={p} metric="engagement"/>)}</div>
@@ -763,7 +759,7 @@ export default function Home() {
                 <div className="space-y-2">{analysis.guests.map((g,i)=>(
                   <div key={g.guest} className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-3 flex items-center gap-3">
                     <span className="text-amber-400 font-bold text-sm w-5">{i+1}</span>
-                    <div className="flex-1 min-w-0"><div className="text-white text-sm font-medium truncate">{g.guest}</div><div className="text-xs text-[#6a5a4a]">{g.appearances} appearance{g.appearances>1?'s':''} \u00b7 {g.platform}</div></div>
+                    <div className="flex-1 min-w-0"><div className="text-white text-sm font-medium truncate">{g.guest}</div><div className="text-xs text-[#6a5a4a]">{g.appearances} appearance{g.appearances>1?'s':''} · {g.platform}</div></div>
                     <div className="text-amber-400 font-semibold text-sm">{fmt(g.avgPerformance)}</div>
                   </div>
                 ))}</div>
@@ -787,8 +783,8 @@ export default function Home() {
                 <div className="space-y-3">{analysis.extremes.map(e=>(
                   <div key={e.platform} className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-3">
                     <div className="text-xs text-[#6a5a4a] uppercase tracking-wider mb-2 font-semibold">{e.platform}</div>
-                    {e.best&&<div className="mb-2"><div className="text-xs text-green-400 font-semibold mb-0.5">&#9650; BEST \u2014 {fmt(e.best.value)} {e.best.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.best.title}</div></div>}
-                    {e.worst&&<div><div className="text-xs text-red-400 font-semibold mb-0.5">&#9660; LOWEST \u2014 {fmt(e.worst.value)} {e.worst.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.worst.title}</div></div>}
+                    {e.best&&<div className="mb-2"><div className="text-xs text-green-400 font-semibold mb-0.5">▲ BEST — {fmt(e.best.value)} {e.best.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.best.title}</div></div>}
+                    {e.worst&&<div><div className="text-xs text-red-400 font-semibold mb-0.5">▼ LOWEST — {fmt(e.worst.value)} {e.worst.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.worst.title}</div></div>}
                   </div>
                 ))}</div>
               ) : <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-4 text-center text-xs text-[#6a5a4a]">Loading performance data...</div>}
@@ -796,8 +792,8 @@ export default function Home() {
           </div>
         </Section>
 
-        <Section icon="📡" title="Social Analytics \u2014 Metricool">
-          <SocialAnalyticsSection />
+        <Section icon="📡" title="Social Analytics — Metricool">
+          <SocialAnalyticsSection onRowsChange={setMetricoolRows} />
         </Section>
 
       </main>
