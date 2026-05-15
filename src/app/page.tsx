@@ -1,5 +1,9 @@
 'use client';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, ChangeEvent } from 'react';
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip,
+  CartesianGrid, Legend, ResponsiveContainer,
+} from 'recharts';
 
 interface VideoItem { id: string; title: string; thumbnail: string; views: number; likes: number; comments: number; duration: string; publishedAt: string; engagementRate: number; }
 interface PostItem { id: string; caption: string; thumbnail: string; likes: number; comments: number; views: number; publishedAt?: string; url?: string; shares?: number; engagement?: number; }
@@ -13,14 +17,43 @@ interface DashData {
   generatedAt?: string;
 }
 
+interface MetricoolRow {
+  image: string;
+  url: string;
+  text: string;
+  network: string;
+  date: string;
+  impressions: number;
+  interactions: number;
+  engagement: number;
+}
+
+interface PlatformSummary {
+  network: string;
+  totalPosts: number;
+  totalImpressions: number;
+  avgEngagement: number;
+}
+
+interface MonthlyDataPoint {
+  month: string;
+  [network: string]: number | string;
+}
+
+interface TopicImpression {
+  topic: string;
+  totalImpressions: number;
+  postCount: number;
+}
+
 function fmt(n: number | null | undefined): string {
-  if (n == null || isNaN(n as number)) return '—';
+  if (n == null || isNaN(n as number)) return '\u2014';
   if ((n as number) >= 1000000) return ((n as number) / 1000000).toFixed(1) + 'M';
   if ((n as number) >= 1000) return ((n as number) / 1000).toFixed(1) + 'K';
   return String(Math.round(n as number));
 }
 function fmtPct(n: number | null | undefined): string {
-  if (n == null || isNaN(n as number)) return '—';
+  if (n == null || isNaN(n as number)) return '\u2014';
   return (n as number).toFixed(2) + '%';
 }
 function timeAgo(dateStr: string): string {
@@ -83,7 +116,6 @@ function analyzeContent(data: DashData) {
   const guestMap: Record<string, { total: number; count: number; platform: string }> = {};
   const topicMap: Record<string, { total: number; count: number }> = {};
   const extremes: PerfExtreme[] = [];
-
   function addGuest(name: string, val: number, plat: string) {
     if (!guestMap[name]) guestMap[name] = { total: 0, count: 0, platform: plat };
     guestMap[name].total += val; guestMap[name].count++;
@@ -94,7 +126,6 @@ function analyzeContent(data: DashData) {
     if (!topicMap[t]) topicMap[t] = { total: 0, count: 0 };
     topicMap[t].total += val; topicMap[t].count++;
   }
-
   const ytVideos = data.youtube?.topVideos || data.youtube?.videos || [];
   if (ytVideos.length > 0) {
     ytVideos.forEach(v => { const g = extractGuest(v.title); if (g) addGuest(g, v.views, 'YouTube'); addTopic(v.title, v.views); });
@@ -110,11 +141,7 @@ function analyzeContent(data: DashData) {
     const worstMetric = s[s.length-1].views > 0 ? 'views' : 'likes';
     const worstValue = s[s.length-1].views > 0 ? s[s.length-1].views : s[s.length-1].likes;
     if (bestValue > 0) {
-      extremes.push({
-        platform: 'Instagram',
-        best: { title: s[0].caption, value: bestValue, metric: bestMetric },
-        worst: { title: s[s.length-1].caption, value: worstValue, metric: worstMetric },
-      });
+      extremes.push({ platform: 'Instagram', best: { title: s[0].caption, value: bestValue, metric: bestMetric }, worst: { title: s[s.length-1].caption, value: worstValue, metric: worstMetric } });
     }
   }
   const ttPosts = data.tiktok?.topPosts || [];
@@ -125,9 +152,6 @@ function analyzeContent(data: DashData) {
   }
   const eps = data.podcast?.topEpisodes || data.podcast?.episodes || [];
   if (eps.length > 0) {
-    // Always extract guest names and topics from podcast episode titles,
-    // regardless of whether download analytics are available.
-    // Use downloads+streams as the performance signal when available, else rank equally (1).
     const hasAnalytics = data.podcast?.analyticsAvailable === true;
     eps.forEach(ep => {
       const perf = hasAnalytics ? (ep.downloads + ep.streams) : 1;
@@ -140,11 +164,108 @@ function analyzeContent(data: DashData) {
       if (s[0]?.downloads > 0) extremes.push({ platform: 'Podcast', best: { title: s[0].title, value: s[0].downloads+s[0].streams, metric: 'downloads' }, worst: { title: s[s.length-1].title, value: s[s.length-1].downloads+s[s.length-1].streams, metric: 'downloads' } });
     }
   }
-
   const guests: GuestStat[] = Object.entries(guestMap).map(([g, s]) => ({ guest: g, avgPerformance: Math.round(s.total/s.count), appearances: s.count, platform: s.platform })).sort((a,b) => b.avgPerformance - a.avgPerformance).slice(0,8);
   const topics: TopicStat[] = Object.entries(topicMap).map(([t, s]) => ({ topic: t, avgPerformance: Math.round(s.total/s.count), count: s.count })).sort((a,b) => b.avgPerformance - a.avgPerformance).slice(0,6);
   return { guests, topics, extremes };
 }
+
+function parseCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '"') {
+      let val = '';
+      i++;
+      while (i < line.length) {
+        if (line[i] === '"' && line[i + 1] === '"') { val += '"'; i += 2; }
+        else if (line[i] === '"') { i++; break; }
+        else { val += line[i]; i++; }
+      }
+      fields.push(val);
+      if (line[i] === ',') i++;
+    } else {
+      let val = '';
+      while (i < line.length && line[i] !== ',') { val += line[i]; i++; }
+      fields.push(val.trim());
+      if (line[i] === ',') i++;
+    }
+  }
+  return fields;
+}
+
+function parseMetricoolCSV(csvText: string): MetricoolRow[] {
+  const lines = csvText.split(/\r?\n/).filter(l => l.trim() !== '');
+  if (lines.length < 2) return [];
+  const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().trim());
+  const idx = (name: string) => headers.indexOf(name);
+  const iImg = idx('image'), iUrl = idx('url'), iText = idx('text'),
+        iNet = idx('network'), iDate = idx('date'),
+        iImp = idx('impressions'), iInt = idx('interactions'), iEng = idx('engagement');
+  const rows: MetricoolRow[] = [];
+  for (let r = 1; r < lines.length; r++) {
+    const cols = parseCSVLine(lines[r]);
+    if (cols.length < 5) continue;
+    rows.push({
+      image:        iImg  >= 0 ? cols[iImg]  || '' : '',
+      url:          iUrl  >= 0 ? cols[iUrl]  || '' : '',
+      text:         iText >= 0 ? cols[iText] || '' : '',
+      network:      iNet  >= 0 ? (cols[iNet] || '').toLowerCase().trim() : '',
+      date:         iDate >= 0 ? cols[iDate] || '' : '',
+      impressions:  iImp  >= 0 ? parseFloat(cols[iImp])  || 0 : 0,
+      interactions: iInt  >= 0 ? parseFloat(cols[iInt])  || 0 : 0,
+      engagement:   iEng  >= 0 ? parseFloat(cols[iEng])  || 0 : 0,
+    });
+  }
+  return rows.filter(r => r.network !== '');
+}
+
+function buildPlatformSummary(rows: MetricoolRow[]): PlatformSummary[] {
+  const map: Record<string, { impressions: number; engagementSum: number; count: number }> = {};
+  for (const r of rows) {
+    if (!map[r.network]) map[r.network] = { impressions: 0, engagementSum: 0, count: 0 };
+    map[r.network].impressions   += r.impressions;
+    map[r.network].engagementSum += r.engagement;
+    map[r.network].count++;
+  }
+  return Object.entries(map)
+    .map(([network, s]) => ({ network, totalPosts: s.count, totalImpressions: s.impressions, avgEngagement: s.count > 0 ? s.engagementSum / s.count : 0 }))
+    .sort((a, b) => b.totalImpressions - a.totalImpressions);
+}
+
+function buildMonthlyTrend(rows: MetricoolRow[], networks: string[]): MonthlyDataPoint[] {
+  const map: Record<string, Record<string, number>> = {};
+  for (const r of rows) {
+    if (!networks.includes(r.network)) continue;
+    const month = r.date.slice(0, 7);
+    if (!month || month.length !== 7) continue;
+    if (!map[month]) map[month] = {};
+    map[month][r.network] = (map[month][r.network] || 0) + r.impressions;
+  }
+  return Object.entries(map)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, nets]) => ({ month, ...nets }));
+}
+
+function buildTopTopics(rows: MetricoolRow[]): TopicImpression[] {
+  const STOP = new Set(['the','and','for','are','but','not','you','all','any','can','her','was','our','one','had','his','him','has','how','its','now','did','get','may','new','see','two','who','day','way','use','from','that','this','with','have','your','they','been','more','will','what','when','like','just','into','than','then','also','some','time','each','very','much','both','same','over','such','here','only','most','other','their','about','would','there','could','after','think','first','these','those','being','great','many','even','want','give','back','come','does','good','well','know','long','make','said','take','them','went','were','which','while','work','years','help','need','put','out','she','yet','in','is','it','of','to','a','an','or','as','at','by','if','up','do','so','we','be','me','my','no','us','am']);
+  const wordMap: Record<string, { impressions: number; count: number }> = {};
+  for (const r of rows) {
+    const words = r.text.toLowerCase().replace(/https?:\/\/\S+/g, '').replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 3 && !STOP.has(w));
+    const seen = new Set<string>();
+    for (const w of words) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      if (!wordMap[w]) wordMap[w] = { impressions: 0, count: 0 };
+      wordMap[w].impressions += r.impressions;
+      wordMap[w].count++;
+    }
+  }
+  return Object.entries(wordMap).map(([topic, s]) => ({ topic, totalImpressions: s.impressions, postCount: s.count })).filter(t => t.postCount >= 2).sort((a, b) => b.totalImpressions - a.totalImpressions).slice(0, 10);
+}
+
+const NET_COLORS: Record<string, string> = { instagram: '#E1306C', facebook: '#1877F2', youtube: '#FF0000', tiktok: '#69C9D0', linkedin: '#0A66C2', twitter: '#1DA1F2', threads: '#9B9B9B' };
+function netColor(n: string): string { return NET_COLORS[n.toLowerCase()] || '#8a7060'; }
+function netLabel(n: string): string { return n.charAt(0).toUpperCase() + n.slice(1); }
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -173,11 +294,7 @@ function PostCard({ post, metric }: { post: PostItem; metric: string }) {
   return (
     <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
       <div className="h-36 bg-[#0f0d0a] relative">
-        {thumb && !imgErr ? (
-          <img src={thumb} alt="" className="w-full h-full object-cover" onError={() => setImgErr(true)} />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-[#3a2a1a] text-4xl">📸</div>
-        )}
+        {thumb && !imgErr ? <img src={thumb} alt="" className="w-full h-full object-cover" onError={() => setImgErr(true)} /> : <div className="w-full h-full flex items-center justify-center text-[#3a2a1a] text-4xl">📸</div>}
       </div>
       <div className="p-3">
         <p className="text-xs text-[#ccc] line-clamp-2 mb-2">{post.caption}</p>
@@ -253,9 +370,208 @@ function Section({ icon, title, children }: { icon: string; title: string; child
           <span className="text-xl">{icon}</span>
           <span className="text-white font-semibold text-lg">{title}</span>
         </div>
-        <span className="text-[#6a5a4a]">{open ? '∧' : '∨'}</span>
+        <span className="text-[#6a5a4a]">{open ? '\u2227' : '\u2228'}</span>
       </button>
       {open && <div className="px-6 pb-6">{children}</div>}
+    </div>
+  );
+}
+
+interface MetricoolState { rows: MetricoolRow[]; uploadedAt: Date; fileName: string; }
+
+function SocialAnalyticsSection() {
+  const [metricool, setMetricool]         = useState<MetricoolState | null>(null);
+  const [parsing, setParsing]             = useState(false);
+  const [parseError, setParseError]       = useState<string | null>(null);
+  const [networkFilter, setNetworkFilter] = useState<string>('all');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setParsing(true); setParseError(null);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const text = evt.target?.result as string;
+        const rows = parseMetricoolCSV(text);
+        if (rows.length === 0) {
+          setParseError('No valid rows found. Make sure this is a Metricool CSV export with columns: Image, URL, Text, Network, Date, Impressions, Interactions, Engagement.');
+        } else {
+          setMetricool({ rows, uploadedAt: new Date(), fileName: file.name });
+          setNetworkFilter('all');
+        }
+      } catch (err) { setParseError('Failed to parse CSV: ' + String(err)); }
+      finally { setParsing(false); }
+    };
+    reader.onerror = () => { setParseError('Failed to read file.'); setParsing(false); };
+    reader.readAsText(file);
+    e.target.value = '';
+  }
+
+  function handleClear() { setMetricool(null); setParseError(null); setNetworkFilter('all'); }
+
+  const allNetworks: string[] = metricool ? Array.from(new Set(metricool.rows.map(r => r.network))).sort() : [];
+  const filteredRows: MetricoolRow[] = metricool ? (networkFilter === 'all' ? metricool.rows : metricool.rows.filter(r => r.network === networkFilter)) : [];
+  const platformSummary: PlatformSummary[] = metricool ? buildPlatformSummary(metricool.rows) : [];
+  const top10: MetricoolRow[] = [...filteredRows].sort((a, b) => b.impressions - a.impressions).slice(0, 10);
+  const monthlyData: MonthlyDataPoint[] = metricool ? buildMonthlyTrend(metricool.rows, allNetworks) : [];
+  const topTopics: TopicImpression[] = metricool ? buildTopTopics(filteredRows) : [];
+  const maxTopicImpressions: number = topTopics[0]?.totalImpressions || 1;
+
+  if (!metricool) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12">
+        <div className="text-5xl mb-4">📊</div>
+        <div className="text-white font-semibold text-lg mb-2">Upload Metricool Export</div>
+        <div className="text-sm text-[#8a7060] mb-6 text-center max-w-md">
+          Export your analytics CSV from Metricool (annual export, all networks). Expected columns: Image, URL, Text, Network, Date, Impressions, Interactions, Engagement.
+        </div>
+        {parseError && <div className="bg-red-900/30 border border-red-800 text-red-300 text-sm rounded-xl px-5 py-3 mb-4 max-w-lg text-center">{parseError}</div>}
+        <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFileChange} />
+        <button onClick={() => fileInputRef.current?.click()} disabled={parsing} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold px-6 py-3 rounded-xl flex items-center gap-2 transition-colors">
+          {parsing ? <><span className="inline-block animate-spin">\u27f3</span> Parsing CSV\u2026</> : <><span>📂</span> Choose CSV File</>}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="text-xs text-[#8a7060]">
+          <span className="text-white font-medium">{metricool.fileName}</span>
+          {' \u00b7 '}{metricool.rows.length.toLocaleString()} posts parsed
+          {' \u00b7 '}Last updated {metricool.uploadedAt.toLocaleTimeString()}
+        </div>
+        <button onClick={handleClear} className="bg-[#1a1612] border border-[#2a2118] hover:bg-[#2a2118] text-sm text-[#8a7060] hover:text-white rounded-lg px-3 py-1.5 transition-colors">
+          \u2715 Clear / Re-upload
+        </button>
+      </div>
+
+      <div>
+        <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Platform Summary</div>
+        <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(platformSummary.length, 4)}, minmax(0,1fr))` }}>
+          {platformSummary.map(p => (
+            <div key={p.network} className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: netColor(p.network) }} />
+                <span className="text-xs text-[#8a7060] uppercase tracking-wider font-semibold">{netLabel(p.network)}</span>
+              </div>
+              <div className="text-2xl font-bold text-white">{fmt(p.totalImpressions)}</div>
+              <div className="text-xs text-[#6a5a4a] mb-3">total impressions</div>
+              <div className="grid grid-cols-2 gap-2 pt-3 border-t border-[#2a2118] text-xs">
+                <div><div className="text-[#6a5a4a] mb-0.5">Posts</div><div className="text-white font-semibold">{p.totalPosts.toLocaleString()}</div></div>
+                <div><div className="text-[#6a5a4a] mb-0.5">Avg Eng</div><div className="text-amber-400 font-semibold">{fmtPct(p.avgEngagement)}</div></div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs text-[#6a5a4a]">Filter by network:</span>
+        {(['all', ...allNetworks] as string[]).map(n => (
+          <button key={n} onClick={() => setNetworkFilter(n)} className={`text-xs px-3 py-1 rounded-full border transition-colors ${networkFilter === n ? 'bg-amber-600 border-amber-600 text-white' : 'bg-[#1a1612] border-[#2a2118] text-[#8a7060] hover:text-white hover:border-[#4a3a2a]'}`}>
+            {n === 'all' ? 'All Networks' : netLabel(n)}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">
+          Top 10 Posts by Impressions
+          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">\u2014 {netLabel(networkFilter)}</span>}
+        </div>
+        <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#2a2118]">
+                <th className="text-left text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">#</th>
+                <th className="text-left text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Network</th>
+                <th className="text-left text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Date</th>
+                <th className="text-left text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Caption</th>
+                <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Impressions</th>
+                <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Interactions</th>
+                <th className="text-right text-xs text-[#8a7060] uppercase tracking-wider px-4 py-3 font-medium">Engagement</th>
+              </tr>
+            </thead>
+            <tbody>
+              {top10.map((row, i) => (
+                <tr key={i} className="border-b border-[#2a2118] last:border-0 hover:bg-[#1e1a16] transition-colors">
+                  <td className="px-4 py-3 text-[#6a5a4a] font-medium">{i + 1}</td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: netColor(row.network) }} />
+                      <span className="text-xs text-[#ccc]">{netLabel(row.network)}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-[#8a7060] whitespace-nowrap">{row.date.slice(0, 10)}</td>
+                  <td className="px-4 py-3 text-xs text-[#ccc] max-w-xs">
+                    <div className="truncate" title={row.text}>{row.text.slice(0, 120)}{row.text.length > 120 ? '\u2026' : ''}</div>
+                  </td>
+                  <td className="px-4 py-3 text-right text-amber-400 font-semibold">{fmt(row.impressions)}</td>
+                  <td className="px-4 py-3 text-right text-xs text-[#ccc]">{fmt(row.interactions)}</td>
+                  <td className="px-4 py-3 text-right text-xs text-green-400">{fmtPct(row.engagement)}</td>
+                </tr>
+              ))}
+              {top10.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-xs text-[#6a5a4a]">No posts found for this filter.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Monthly Impressions Trend</div>
+        <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-4">
+          {monthlyData.length === 0 ? (
+            <div className="flex items-center justify-center h-48 text-xs text-[#6a5a4a]">No monthly data available.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={monthlyData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#2a2118" />
+                <XAxis dataKey="month" tick={{ fill: '#8a7060', fontSize: 11 }} tickLine={false} axisLine={{ stroke: '#2a2118' }} />
+                <YAxis tick={{ fill: '#8a7060', fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(v: number) => fmt(v)} width={55} />
+                <Tooltip contentStyle={{ backgroundColor: '#1a1612', border: '1px solid #2a2118', borderRadius: '8px', fontSize: '12px', color: '#fff' }} formatter={(value: number, name: string) => [fmt(value), netLabel(name)]} />
+                <Legend formatter={(value: string) => <span style={{ color: '#8a7060', fontSize: '11px' }}>{netLabel(value)}</span>} />
+                {allNetworks.map(net => (
+                  <Line key={net} type="monotone" dataKey={net} stroke={netColor(net)} strokeWidth={2} dot={false} activeDot={{ r: 4, strokeWidth: 0 }} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">
+          Top Topics by Total Impressions
+          {networkFilter !== 'all' && <span className="ml-2 normal-case text-amber-500">\u2014 {netLabel(networkFilter)}</span>}
+        </div>
+        {topTopics.length === 0 ? (
+          <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-6 text-center text-xs text-[#6a5a4a]">Not enough keyword data \u2014 try uploading more posts or selecting a different network.</div>
+        ) : (
+          <div className="space-y-2">
+            {topTopics.map((t, i) => (
+              <div key={t.topic} className="bg-[#1a1612] border border-[#2a2118] rounded-xl px-4 py-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-amber-400 font-bold text-sm w-5">{i + 1}</span>
+                    <span className="text-white text-sm font-medium capitalize">{t.topic}</span>
+                    <span className="text-xs text-[#6a5a4a]">({t.postCount} posts)</span>
+                  </div>
+                  <span className="text-amber-400 font-semibold text-sm">{fmt(t.totalImpressions)}</span>
+                </div>
+                <div className="w-full bg-[#2a2118] rounded-full h-1.5">
+                  <div className="bg-amber-600 h-1.5 rounded-full transition-all" style={{ width: `${Math.round((t.totalImpressions / maxTopicImpressions) * 100)}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -292,12 +608,12 @@ export default function Home() {
   const ig = data?.instagram;
   const tt = data?.tiktok;
   const fb = data?.facebook;
-  const ytVideos = yt?.topVideos || yt?.videos || [];
-  const episodes = pod?.topEpisodes || pod?.episodes || [];
-  const igPosts = ig?.topPosts || [];
-  const ttPosts = tt?.topPosts || [];
-  const fbPosts = fb?.topPosts || [];
-  const analysis = data ? analyzeContent(data) : null;
+  const ytVideos  = yt?.topVideos  || yt?.videos   || [];
+  const episodes  = pod?.topEpisodes || pod?.episodes || [];
+  const igPosts   = ig?.topPosts   || [];
+  const ttPosts   = tt?.topPosts   || [];
+  const fbPosts   = fb?.topPosts   || [];
+  const analysis  = data ? analyzeContent(data) : null;
 
   return (
     <div className="min-h-screen bg-[#0c0a08] text-white">
@@ -305,7 +621,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold">Commune Podcast</h1>
-            <p className="text-xs text-[#6a5a4a]">Command Center &middot; {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</p>
+            <p className="text-xs text-[#6a5a4a]">Command Center \u00b7 {new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</p>
           </div>
           <div className="flex items-center gap-3">
             <select value={autoRefresh} onChange={e=>setAutoRefresh(Number(e.target.value))} className="bg-[#1a1612] border border-[#2a2118] text-sm text-white rounded-lg px-3 py-2 focus:outline-none">
@@ -325,19 +641,19 @@ export default function Home() {
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
         <div className="grid grid-cols-5 gap-4 bg-[#12100e] border border-[#2a2118] rounded-2xl p-4">
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">YouTube Subscribers</div><div className="text-2xl font-bold">{fmt(yt?.channelStats?.subscribers)}</div><div className="text-xs text-[#6a5a4a]">{fmt(yt?.channelStats?.totalViews)} total views</div></div>
-          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Podcast Episodes</div><div className="text-2xl font-bold">{episodes.length||'—'}</div><div className="text-xs text-[#6a5a4a]">{pod?.podcastName||'Commune with Jeff Krasno'}</div></div>
+          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Podcast Episodes</div><div className="text-2xl font-bold">{episodes.length||'\u2014'}</div><div className="text-xs text-[#6a5a4a]">{pod?.podcastName||'Commune with Jeff Krasno'}</div></div>
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Instagram</div><div className="text-2xl font-bold">{fmt(ig?.profileStats?.followers)}</div><div className="text-xs text-[#6a5a4a]">followers</div></div>
           <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">TikTok</div><div className="text-2xl font-bold">{fmt(tt?.profileStats?.followers)}</div><div className="text-xs text-[#6a5a4a]">followers</div></div>
-          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Facebook</div><div className="text-2xl font-bold">{fbPosts.length>0?fbPosts.length+' posts':'—'}</div><div className="text-xs text-[#6a5a4a]">@jeffpatrickkrasno</div></div>
+          <div className="text-center"><div className="text-xs text-[#8a7060] uppercase tracking-wider mb-1">Facebook</div><div className="text-2xl font-bold">{fbPosts.length>0?fbPosts.length+' posts':'\u2014'}</div><div className="text-xs text-[#6a5a4a]">@jeffpatrickkrasno</div></div>
         </div>
 
-        <Section icon="&#9654;" title="YouTube — @jeffkrasno">
+        <Section icon="&#9654;" title="YouTube \u2014 @jeffkrasno">
           {yt?.status?.connected===false ? <NotConnected platform="YouTube" error={yt.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label="Subscribers" value={fmt(yt?.channelStats?.subscribers)} />
-                <StatCard label="Total Views" value={fmt(yt?.channelStats?.totalViews)} />
-                <StatCard label="Videos" value={fmt(yt?.channelStats?.videoCount)} />
+                <StatCard label="Subscribers"    value={fmt(yt?.channelStats?.subscribers)} />
+                <StatCard label="Total Views"    value={fmt(yt?.channelStats?.totalViews)} />
+                <StatCard label="Videos"         value={fmt(yt?.channelStats?.videoCount)} />
                 <StatCard label="Avg Engagement" value={fmtPct(yt?.channelStats?.avgEngagement)} />
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Videos by Views</div>
@@ -346,14 +662,14 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#127897;" title="Commune Podcast — Megaphone">
+        <Section icon="&#127897;" title="Commune Podcast \u2014 Megaphone">
           {pod?.status?.connected===false ? <NotConnected platform="Podcast" error={pod.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label="Total Episodes" value={String(episodes.length||'—')} />
-                <StatCard label="Total Downloads" value={pod?.totalDownloads!=null?fmt(pod.totalDownloads):'—'} sub={pod?.totalDownloads==null?'analytics unavailable':undefined} />
-                <StatCard label="Total Streams" value={pod?.totalStreams!=null?fmt(pod.totalStreams):'—'} sub={pod?.totalStreams==null?'analytics unavailable':undefined} />
-                <StatCard label="Avg Listen Time" value="—" sub="analytics unavailable" />
+                <StatCard label="Total Episodes"  value={String(episodes.length||'\u2014')} />
+                <StatCard label="Total Downloads" value={pod?.totalDownloads!=null?fmt(pod.totalDownloads):'\u2014'} sub={pod?.totalDownloads==null?'analytics unavailable':undefined} />
+                <StatCard label="Total Streams"   value={pod?.totalStreams!=null?fmt(pod.totalStreams):'\u2014'} sub={pod?.totalStreams==null?'analytics unavailable':undefined} />
+                <StatCard label="Avg Listen Time" value="\u2014" sub="analytics unavailable" />
               </div>
               {!pod?.analyticsAvailable && (
                 <div className="bg-[#1a1410] border border-[#3a2a10] rounded-xl p-4 mb-6">
@@ -361,7 +677,7 @@ export default function Home() {
                     <span className="text-2xl">&#128273;</span>
                     <div className="flex-1">
                       <div className="font-semibold text-amber-400 mb-1">Enter your Megaphone API key to unlock analytics</div>
-                      <div className="text-xs text-[#8a7060] mb-3">Episode download counts, stream counts, and consumption time require Megaphone API access. Find your key at <strong className="text-white">cms.megaphone.fm &#x2192; Settings &#x2192; API</strong>.</div>
+                      <div className="text-xs text-[#8a7060] mb-3">Episode download counts, stream counts, and consumption time require Megaphone API access. Find your key at <strong className="text-white">cms.megaphone.fm \u2192 Settings \u2192 API</strong>.</div>
                       <div className="flex gap-2">
                         <input type="password" value={mkInput} onChange={e=>setMkInput(e.target.value)} placeholder="Enter Megaphone API key..." className="flex-1 bg-[#0c0a08] border border-[#3a2a10] text-white text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-amber-500" onKeyDown={e=>{if(e.key==='Enter'){setMegaphoneKey(mkInput);loadData(mkInput);}}} />
                         <button onClick={()=>{setMegaphoneKey(mkInput);loadData(mkInput);}} className="bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold px-4 py-2 rounded-lg">Connect</button>
@@ -371,20 +687,20 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">{pod?.analyticsAvailable?'Top Episodes by Downloads':'Recent Episodes — connect API above for performance ranking'}</div>
+              <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">{pod?.analyticsAvailable?'Top Episodes by Downloads':'Recent Episodes \u2014 connect API above for performance ranking'}</div>
               <div className="grid grid-cols-4 gap-4">{episodes.slice(0,8).map(ep=><EpisodeCard key={ep.id} ep={ep} analytics={!!pod?.analyticsAvailable}/>)}</div>
             </>
           )}
         </Section>
 
-        <Section icon="&#128247;" title="Instagram — @jeffkrasno">
+        <Section icon="&#128247;" title="Instagram \u2014 @jeffkrasno">
           {ig?.status?.connected===false ? <NotConnected platform="Instagram" error={ig.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label="Followers" value={fmt(ig?.profileStats?.followers)} />
-                <StatCard label="Total Views" value={fmt(ig?.profileStats?.totalViews)} />
+                <StatCard label="Followers"      value={fmt(ig?.profileStats?.followers)} />
+                <StatCard label="Total Views"    value={fmt(ig?.profileStats?.totalViews)} />
                 <StatCard label="Avg Engagement" value={fmtPct(ig?.profileStats?.avgEngagement)} />
-                <StatCard label="Posts" value={String(igPosts.length)} />
+                <StatCard label="Posts"          value={String(igPosts.length)} />
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Posts by Views</div>
               <div className="grid grid-cols-4 gap-4">{igPosts.slice(0,8).map(p=><PostCard key={p.id} post={p} metric="views"/>)}</div>
@@ -392,14 +708,14 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#127925;" title="TikTok — @jeffkrasno">
+        <Section icon="&#127925;" title="TikTok \u2014 @jeffkrasno">
           {tt?.status?.connected===false ? <NotConnected platform="TikTok" error={tt.status.error} /> : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-6">
-                <StatCard label="Followers" value={fmt(tt?.profileStats?.followers)} />
-                <StatCard label="Total Views" value={fmt(tt?.profileStats?.totalViews)} />
+                <StatCard label="Followers"      value={fmt(tt?.profileStats?.followers)} />
+                <StatCard label="Total Views"    value={fmt(tt?.profileStats?.totalViews)} />
                 <StatCard label="Avg Engagement" value={fmtPct(tt?.profileStats?.avgEngagement)} />
-                <StatCard label="Avg CTR" value={fmtPct(tt?.profileStats?.avgCtr)} />
+                <StatCard label="Avg CTR"        value={fmtPct(tt?.profileStats?.avgCtr)} />
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Posts by Views</div>
               <div className="grid grid-cols-4 gap-4">{ttPosts.slice(0,8).map(p=><PostCard key={p.id} post={p} metric="views"/>)}</div>
@@ -407,7 +723,7 @@ export default function Home() {
           )}
         </Section>
 
-        <Section icon="&#128100;" title="Facebook — @jeffpatrickkrasno">
+        <Section icon="&#128100;" title="Facebook \u2014 @jeffpatrickkrasno">
           {fb?.status?.connected===false ? (
             <div className="space-y-4">
               <NotConnected platform="Facebook" error={fb?.status?.error} />
@@ -424,14 +740,14 @@ export default function Home() {
           ) : (
             <>
               <div className="grid grid-cols-4 gap-4 mb-4">
-                <StatCard label="Page Likes" value={fb?.profileStats?.pageLikes?fmt(fb.profileStats.pageLikes):'—'} sub={!fb?.profileStats?.pageLikes?'needs Graph API token':undefined} />
-                <StatCard label="Followers" value={fb?.profileStats?.followers?fmt(fb.profileStats.followers):'—'} sub={!fb?.profileStats?.followers?'needs Graph API token':undefined} />
-                <StatCard label="Total Reach" value={fmt(fb?.profileStats?.totalReach)} />
-                <StatCard label="Avg Engagement" value={fb?.profileStats?.avgEngagement?fmt(fb.profileStats.avgEngagement):'—'} sub="per post" />
+                <StatCard label="Page Likes"     value={fb?.profileStats?.pageLikes?fmt(fb.profileStats.pageLikes):'\u2014'} sub={!fb?.profileStats?.pageLikes?'needs Graph API token':undefined} />
+                <StatCard label="Followers"      value={fb?.profileStats?.followers?fmt(fb.profileStats.followers):'\u2014'} sub={!fb?.profileStats?.followers?'needs Graph API token':undefined} />
+                <StatCard label="Total Reach"    value={fmt(fb?.profileStats?.totalReach)} />
+                <StatCard label="Avg Engagement" value={fb?.profileStats?.avgEngagement?fmt(fb.profileStats.avgEngagement):'\u2014'} sub="per post" />
               </div>
               <div className="bg-[#1a1410] border border-[#2a1f10] rounded-xl p-3 mb-4 flex items-start gap-2">
                 <span className="text-amber-500 text-sm mt-0.5">&#8505;</span>
-                <div className="text-xs text-[#8a7060]"><strong className="text-amber-400">Follower &amp; Page Like counts require a Facebook Graph API token.</strong> To enable: Facebook Developer App &#x2192; request <code className="bg-[#0c0a08] px-1 rounded">pages_read_engagement</code> &#x2192; generate Page Access Token &#x2192; add as <code className="bg-[#0c0a08] px-1 rounded">FACEBOOK_ACCESS_TOKEN</code> in Vercel env vars.</div>
+                <div className="text-xs text-[#8a7060]"><strong className="text-amber-400">Follower &amp; Page Like counts require a Facebook Graph API token.</strong> To enable: Facebook Developer App \u2192 request <code className="bg-[#0c0a08] px-1 rounded">pages_read_engagement</code> \u2192 generate Page Access Token \u2192 add as <code className="bg-[#0c0a08] px-1 rounded">FACEBOOK_ACCESS_TOKEN</code> in Vercel env vars.</div>
               </div>
               <div className="text-sm text-[#8a7060] uppercase tracking-wider mb-3">Top Posts by Engagement</div>
               <div className="grid grid-cols-4 gap-4">{fbPosts.slice(0,8).map(p=><PostCard key={p.id} post={p} metric="engagement"/>)}</div>
@@ -447,7 +763,7 @@ export default function Home() {
                 <div className="space-y-2">{analysis.guests.map((g,i)=>(
                   <div key={g.guest} className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-3 flex items-center gap-3">
                     <span className="text-amber-400 font-bold text-sm w-5">{i+1}</span>
-                    <div className="flex-1 min-w-0"><div className="text-white text-sm font-medium truncate">{g.guest}</div><div className="text-xs text-[#6a5a4a]">{g.appearances} appearance{g.appearances>1?'s':''} &middot; {g.platform}</div></div>
+                    <div className="flex-1 min-w-0"><div className="text-white text-sm font-medium truncate">{g.guest}</div><div className="text-xs text-[#6a5a4a]">{g.appearances} appearance{g.appearances>1?'s':''} \u00b7 {g.platform}</div></div>
                     <div className="text-amber-400 font-semibold text-sm">{fmt(g.avgPerformance)}</div>
                   </div>
                 ))}</div>
@@ -471,15 +787,20 @@ export default function Home() {
                 <div className="space-y-3">{analysis.extremes.map(e=>(
                   <div key={e.platform} className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-3">
                     <div className="text-xs text-[#6a5a4a] uppercase tracking-wider mb-2 font-semibold">{e.platform}</div>
-                    {e.best&&<div className="mb-2"><div className="text-xs text-green-400 font-semibold mb-0.5">&#9650; BEST &mdash; {fmt(e.best.value)} {e.best.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.best.title}</div></div>}
-                    {e.worst&&<div><div className="text-xs text-red-400 font-semibold mb-0.5">&#9660; LOWEST &mdash; {fmt(e.worst.value)} {e.worst.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.worst.title}</div></div>}
+                    {e.best&&<div className="mb-2"><div className="text-xs text-green-400 font-semibold mb-0.5">&#9650; BEST \u2014 {fmt(e.best.value)} {e.best.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.best.title}</div></div>}
+                    {e.worst&&<div><div className="text-xs text-red-400 font-semibold mb-0.5">&#9660; LOWEST \u2014 {fmt(e.worst.value)} {e.worst.metric}</div><div className="text-xs text-[#ccc] line-clamp-2">{e.worst.title}</div></div>}
                   </div>
                 ))}</div>
               ) : <div className="bg-[#1a1612] border border-[#2a2118] rounded-xl p-4 text-center text-xs text-[#6a5a4a]">Loading performance data...</div>}
             </div>
           </div>
         </Section>
+
+        <Section icon="📡" title="Social Analytics \u2014 Metricool">
+          <SocialAnalyticsSection />
+        </Section>
+
       </main>
     </div>
   );
-              }
+}
